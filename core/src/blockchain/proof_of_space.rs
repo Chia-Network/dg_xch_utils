@@ -300,7 +300,7 @@ impl ProofOfSpace {
         signage: Bytes32,
     ) -> Option<Bytes32> {
         if self.version != 1
-            || self.get_plot_id().is_none()
+            || self.pool_public_key.is_some() == self.pool_contract_puzzle_hash.is_some()
             || self.strength < constants.min_plot_strength
             || self.strength > constants.max_plot_strength
         {

@@ -28,6 +28,7 @@ fn chia_wire_hash_quality_and_iteration_vectors() {
     let version = ChiaProtocolVersion::default();
     let mut c = MAINNET;
     c.min_plot_size = 18;
+    c.hard_fork_height = 0;
     c.epoch_blocks = 768;
     c.hard_fork2_height = 9216;
     c.number_zero_bits_plot_filter_v2 = 7;
@@ -176,4 +177,39 @@ fn current_chia_peak_envelope() {
     constants.hard_fork2_height = 9216;
     let mut scheduler = dg_xch_timelord::scheduler::Scheduler::new(constants, false, None).unwrap();
     assert!(scheduler.set_peak(peak).unwrap());
+}
+
+#[test]
+fn captured_peer_sequence_schedules_real_unfinished_blocks() {
+    let data = fixture();
+    let mut c = MAINNET;
+    c.min_plot_size = 18;
+    c.hard_fork_height = 0;
+    c.epoch_blocks = 768;
+    c.hard_fork2_height = 9216;
+    c.number_zero_bits_plot_filter_v2 = 7;
+    c.max_plot_strength = 9;
+    c.difficulty_constant_factor = 10052721566054;
+    c.plot_filter_v2_relative_height = [33000, 30000, 27000, 24000, 21000, 18000, 9216, 6144, 3072];
+    let mut scheduler = dg_xch_timelord::scheduler::Scheduler::new(c, false, None).unwrap();
+    let mut scheduled = 0;
+    for message in data["peer_sequence"].as_array().unwrap() {
+        let raw = bytes(message["bytes"].as_str().unwrap());
+        let mut cursor = Cursor::new(raw.as_slice());
+        if message["kind"] == 13 {
+            let peak = dg_xch_core::protocols::timelord::NewPeakTimelord::from_bytes(
+                &mut cursor,
+                ChiaProtocolVersion::default(),
+            )
+            .unwrap();
+            assert!(scheduler.set_peak(peak).unwrap());
+        } else {
+            let unfinished =
+                NewUnfinishedBlockTimelord::from_bytes(&mut cursor, ChiaProtocolVersion::default())
+                    .unwrap();
+            scheduled += usize::from(scheduler.add_unfinished(unfinished).unwrap());
+        }
+        assert_eq!(cursor.position(), raw.len() as u64);
+    }
+    assert!(scheduled > 0);
 }
