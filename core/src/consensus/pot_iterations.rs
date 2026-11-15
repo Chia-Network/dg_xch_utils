@@ -180,3 +180,71 @@ pub fn calculate_iterations_quality_v2(
 #[cfg(test)]
 #[path = "../../tests/unit/consensus/pot_iterations/tests.rs"]
 mod tests;
+
+/// Current Chia iteration lottery for full-node-validated timelord work.
+pub fn calculate_timelord_iterations(
+    constants: &ConsensusConstants,
+    pos: &ProofOfSpace,
+    quality: Bytes32,
+    difficulty: u64,
+    signage: Bytes32,
+    previous_transaction_height: u32,
+) -> Result<u64, Error> {
+    if pos.version == 0 {
+        return Ok(calculate_iterations_quality_for_proof(
+            constants, pos, quality, difficulty, signage,
+        ));
+    }
+    let size = match constants.plot_size_v2 {
+        18 => 637173u64,
+        20 => 2810836,
+        22 => 12291922,
+        24 => 53361993,
+        26 => 230225189,
+        28 => 988009621,
+        _ => {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "unsupported Chia v2 plot size",
+            ));
+        }
+    };
+    if usize::from(constants.plot_filter_v2_relative_height_count)
+        > constants.plot_filter_v2_relative_height.len()
+        || constants.max_effective_plot_filter_bits > 31
+    {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "invalid Chia filter schedule bounds",
+        ));
+    }
+    let relative = previous_transaction_height.saturating_sub(constants.hard_fork2_height);
+    let mut base = constants.number_zero_bits_plot_filter_v2;
+    for (i, offset) in constants
+        .plot_filter_v2_relative_height
+        .iter()
+        .take(usize::from(constants.plot_filter_v2_relative_height_count))
+        .enumerate()
+    {
+        if relative >= *offset {
+            base = base.saturating_sub(
+                (usize::from(constants.plot_filter_v2_relative_height_count) - i) as u8,
+            );
+            break;
+        }
+    }
+    let effective = base
+        .saturating_add(pos.strength.saturating_sub(constants.min_plot_strength))
+        .min(constants.max_effective_plot_filter_bits);
+    let size = size
+        .checked_shl(u32::from(effective.saturating_sub(base)))
+        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "plot size overflow"))?;
+    let mut input = Vec::new();
+    input.extend(quality);
+    input.extend(signage);
+    let q = BigUint::from_bytes_be(&hash_256(input));
+    let result =
+        BigUint::from(difficulty) * BigUint::from(constants.difficulty_constant_factor) * q
+            / ((*TWO_POW_256).clone() * BigUint::from(size));
+    Ok(result.to_u64().unwrap_or(u64::MAX).max(1))
+}

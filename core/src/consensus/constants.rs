@@ -133,6 +133,10 @@ pub struct ConsensusConstants {
     // plot may choose, the v1 phase out window, and the v2 plot filter with its own schedule
     pub number_zero_bits_plot_filter_v2: u8,
     pub plot_size_v2: u8,
+    pub filter_window_size: u8,
+    pub max_effective_plot_filter_bits: u8,
+    pub plot_filter_v2_relative_height: [u32; 9],
+    pub plot_filter_v2_relative_height_count: u8,
     pub min_plot_strength: u8,
     pub max_plot_strength: u8,
     pub plot_v1_phase_out_epoch_bits: u8,
@@ -237,6 +241,12 @@ pub const MAINNET: ConsensusConstants = ConsensusConstants {
     plot_filter_32_height: 20_643_000,
     number_zero_bits_plot_filter_v2: 5,
     plot_size_v2: 28,
+    plot_filter_v2_relative_height_count: 9,
+    filter_window_size: 16,
+    max_effective_plot_filter_bits: 13,
+    plot_filter_v2_relative_height: [
+        50494000, 45444000, 40394000, 35343000, 30298000, 25247000, 20197000, 15146000, 10101000,
+    ],
     min_plot_strength: 2,
     max_plot_strength: 32,
     plot_v1_phase_out_epoch_bits: 8,

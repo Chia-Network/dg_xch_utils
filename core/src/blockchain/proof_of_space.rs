@@ -241,6 +241,96 @@ impl ProofOfSpace {
     }
 }
 
+impl ProofOfSpace {
+    /// Consensus hashing commits to the v2 quality, not the serialized witness.
+    pub fn consensus_bytes(&self, version: ChiaProtocolVersion) -> Result<Vec<u8>, Error> {
+        let mut bytes = self.to_bytes(version)?;
+        if self.version == 1 {
+            #[cfg(feature = "chia-hf2")]
+            {
+                let k = self.proof.0.len().checked_mul(8).ok_or_else(|| {
+                    Error::new(std::io::ErrorKind::InvalidData, "proof size overflow")
+                })? / 128;
+                if !self.proof.0.len().is_multiple_of(16)
+                    || ![18, 20, 22, 24, 26, 28].contains(&k)
+                    || !(2..=63).contains(&self.strength)
+                {
+                    return Err(Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "invalid v2 proof parameters",
+                    ));
+                }
+                let plot = self.get_plot_id().ok_or_else(|| {
+                    Error::new(std::io::ErrorKind::InvalidData, "invalid pool identity")
+                })?;
+                let q = chia_pos2::quality_string_from_proof(
+                    plot.as_ref(),
+                    k as u8,
+                    self.strength,
+                    self.proof.as_ref(),
+                )
+                .ok_or_else(|| {
+                    Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "invalid v2 quality witness",
+                    )
+                })?;
+                let quality = crate::utils::hash_256(chia_pos2::serialize_quality(
+                    &q.chain_links,
+                    self.strength,
+                ));
+                bytes.truncate(bytes.len() - 4 - self.proof.0.len());
+                bytes.extend(quality);
+            }
+            #[cfg(not(feature = "chia-hf2"))]
+            return Err(Error::new(
+                std::io::ErrorKind::Unsupported,
+                "v2 consensus hashing requires chia-hf2",
+            ));
+        }
+        Ok(bytes)
+    }
+    /// Chia timelords recheck the witness/challenge; the full node owns filter
+    /// eligibility and activation context (matching height_agnostic=True).
+    #[cfg(feature = "chia-hf2")]
+    pub fn chia_timelord_quality(
+        &self,
+        constants: &crate::consensus::constants::ConsensusConstants,
+        original: Bytes32,
+        signage: Bytes32,
+    ) -> Option<Bytes32> {
+        if self.version != 1
+            || self.get_plot_id().is_none()
+            || self.strength < constants.min_plot_strength
+            || self.strength > constants.max_plot_strength
+        {
+            return None;
+        }
+        let group = calculate_plot_group_id_v2(
+            self.strength,
+            self.plot_public_key,
+            self.pool_public_key,
+            self.pool_contract_puzzle_hash,
+        );
+        let input = calculate_plot_filter_input(group, original, signage);
+        if self.challenge != Bytes32::from(crate::utils::hash_256(input)) {
+            return None;
+        }
+        let q = chia_pos2::validate_proof_v2(
+            group.as_ref(),
+            self.plot_index,
+            constants.plot_size_v2,
+            self.strength,
+            self.meta_group,
+            self.challenge.as_ref(),
+            self.proof.as_ref(),
+        )?;
+        Some(Bytes32::from(crate::utils::hash_256(
+            chia_pos2::serialize_quality(&q.chain_links, self.strength),
+        )))
+    }
+}
+
 impl ChiaSerialize for ProofOfSpace {
     fn to_bytes(&self, version: ChiaProtocolVersion) -> Result<Vec<u8>, Error> {
         let mut bytes = Vec::new();

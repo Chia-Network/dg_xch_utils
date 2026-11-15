@@ -809,6 +809,7 @@ pub fn unfinished_block_to_full_block(
     // RewardChainBlock: SP-and-earlier fields verbatim from the
     // unfinished reward block, the three infusion-point VDFs spliced in, new height/weight/is_tx.
     let reward_chain_block = RewardChainBlock {
+        header_mmr_root: None,
         weight: new_weight,
         height: new_height,
         total_iters: rcb_u.total_iters,

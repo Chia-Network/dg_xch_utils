@@ -122,6 +122,7 @@ pub fn handshake(network_id: &str, node_type: NodeType, server_port: u16) -> Han
         capabilities: CAPABILITIES
             .iter()
             .map(|entry| (entry.0, entry.1.to_owned()))
+            .chain((node_type == NodeType::Timelord).then_some((6, "1".to_owned())))
             .collect(),
     }
 }

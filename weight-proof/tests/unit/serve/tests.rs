@@ -257,6 +257,7 @@ fn build_chain(spec: &ChainSpec) -> MemStore {
         let block = FullBlock {
             finished_sub_slots,
             reward_chain_block: RewardChainBlock {
+                header_mmr_root: None,
                 weight: u128::from(h) + 1,
                 height: h,
                 total_iters: (u128::from(h) + 1) * 10_000_000,

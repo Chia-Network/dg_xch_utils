@@ -254,6 +254,7 @@ pub(in crate::node) async fn process_ub_inbox<S: BlockStore + CoinStore + Send +
                         pos_sub_slot_rc_hash,
                     );
                     rc_prev.map(|rc_prev| NewUnfinishedBlockTimelord {
+                        header_mmr_root: None,
                         reward_chain_block: block.reward_chain_block.clone(),
                         difficulty,
                         sub_slot_iters: ssi,

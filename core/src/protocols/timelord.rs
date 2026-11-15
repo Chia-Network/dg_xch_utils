@@ -41,6 +41,7 @@ pub struct NewUnfinishedBlockTimelord {
     pub foliage: Foliage,                               //Min Version 0.0.34
     pub sub_epoch_summary: Option<SubEpochSummary>,     //Min Version 0.0.34
     pub rc_prev: Bytes32,                               //Min Version 0.0.34
+    pub header_mmr_root: Option<Bytes32>,
 }
 
 #[derive(ChiaSerial, Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]

@@ -9,6 +9,7 @@ homepage.workspace = true
 repository.workspace = true
 
 [dependencies]
+chia-pos2 = { version = "=1.0.0", optional = true }
 serde_json = "1.0.145"
 async-trait = "0.1.89"
 blst = { version = "0.3.16", features = ["portable"], optional = true }
@@ -75,6 +76,7 @@ harness = false
 required-features = ["bls"]
 
 [features]
+chia-hf2 = ["dep:chia-pos2"]
 # BLS12-381 cryptography via blst (C + assembly). Default-on. Disabling it leaves the
 # pure-data surface (wire/chain types, serialization, RPC structs) compiling without a
 # C toolchain dependency on blst; the CLVM VM stays available but the BLS opcodes error,

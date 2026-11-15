@@ -17,8 +17,15 @@ pub struct ChallengeBlockInfo {
 
 impl ChallengeBlockInfo {
     pub fn hash(&self) -> Result<Bytes32, Error> {
-        Ok(Bytes32::from(hash_256(
-            self.to_bytes(ChiaProtocolVersion::default())?,
-        )))
+        let version = ChiaProtocolVersion::default();
+        let mut bytes = Vec::new();
+        bytes.extend(self.proof_of_space.consensus_bytes(version)?);
+        self.challenge_chain_sp_vdf
+            .append_bytes(&mut bytes, version)?;
+        self.challenge_chain_sp_signature
+            .append_bytes(&mut bytes, version)?;
+        self.challenge_chain_ip_vdf
+            .append_bytes(&mut bytes, version)?;
+        Ok(Bytes32::from(hash_256(bytes)))
     }
 }

@@ -21,8 +21,20 @@ pub struct RewardChainBlockUnfinished {
 
 impl RewardChainBlockUnfinished {
     pub fn hash(&self) -> Result<Bytes32, Error> {
-        Ok(Bytes32::from(hash_256(
-            self.to_bytes(ChiaProtocolVersion::default())?,
-        )))
+        let version = ChiaProtocolVersion::default();
+        let mut bytes = Vec::new();
+        self.total_iters.append_bytes(&mut bytes, version)?;
+        self.signage_point_index.append_bytes(&mut bytes, version)?;
+        self.pos_ss_cc_challenge_hash
+            .append_bytes(&mut bytes, version)?;
+        bytes.extend(self.proof_of_space.consensus_bytes(version)?);
+        self.challenge_chain_sp_vdf
+            .append_bytes(&mut bytes, version)?;
+        self.challenge_chain_sp_signature
+            .append_bytes(&mut bytes, version)?;
+        self.reward_chain_sp_vdf.append_bytes(&mut bytes, version)?;
+        self.reward_chain_sp_signature
+            .append_bytes(&mut bytes, version)?;
+        Ok(Bytes32::from(hash_256(bytes)))
     }
 }

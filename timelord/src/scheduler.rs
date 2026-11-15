@@ -10,8 +10,7 @@ use dg_xch_core::blockchain::sub_epoch_summary::SubEpochSummary;
 use dg_xch_core::blockchain::subslot_proofs::SubSlotProofs;
 use dg_xch_core::consensus::constants::ConsensusConstants;
 use dg_xch_core::consensus::pot_iterations::{
-    calculate_ip_iters, calculate_iterations_quality_for_proof, calculate_sp_interval_iters,
-    calculate_sp_iters, is_overflow_block,
+    calculate_ip_iters, calculate_sp_interval_iters, calculate_sp_iters, is_overflow_block,
 };
 use dg_xch_core::consensus::producer::verify_plot_signature;
 use dg_xch_core::protocols::timelord::{
@@ -439,22 +438,20 @@ impl Scheduler {
             None if block.signage_point_index == 0 => block.pos_ss_cc_challenge_hash,
             _ => return Err(invalid("invalid unfinished signage-point fields")),
         };
-        let quality = match self.transaction_height {
-            Some(transaction_height) => dg_xch_pos::verify_and_get_quality_string_with_context(
+        let quality = if block.proof_of_space.version == 1 {
+            block.proof_of_space.chia_timelord_quality(
+                &self.constants,
+                block.pos_ss_cc_challenge_hash,
+                signage_hash,
+            )
+        } else {
+            dg_xch_pos::verify_and_get_quality_string_without_activation(
                 &block.proof_of_space,
                 &self.constants,
                 block.pos_ss_cc_challenge_hash,
                 signage_hash,
                 height,
-                transaction_height,
-            ),
-            None => dg_xch_pos::verify_and_get_quality_string_without_activation(
-                &block.proof_of_space,
-                &self.constants,
-                block.pos_ss_cc_challenge_hash,
-                signage_hash,
-                height,
-            ),
+            )
         }
         .ok_or_else(|| invalid("unfinished block proof of space is invalid"))?;
         if !verify_plot_signature(
@@ -464,13 +461,14 @@ impl Scheduler {
         ) {
             return Err(invalid("unfinished block signage signature is invalid"));
         }
-        let required = calculate_iterations_quality_for_proof(
+        let required = dg_xch_core::consensus::pot_iterations::calculate_timelord_iterations(
             &self.constants,
             &block.proof_of_space,
             quality,
             message.difficulty,
             signage_hash,
-        );
+            self.transaction_height.unwrap_or(height),
+        )?;
         let offset = calculate_ip_iters(
             &self.constants,
             message.sub_slot_iters,
@@ -913,6 +911,7 @@ mod tests {
         let height = state.height.map_or(0, |height| height + 1);
         NewPeakTimelord {
             reward_chain_block: RewardChainBlock {
+                header_mmr_root: None,
                 weight: state.weight + u128::from(state.difficulty),
                 height,
                 total_iters: state.slot_start
