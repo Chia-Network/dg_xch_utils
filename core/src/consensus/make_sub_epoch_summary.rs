@@ -37,6 +37,7 @@ pub fn make_sub_epoch_summary(
         <= 1
     {
         return Ok(SubEpochSummary {
+            challenge_merkle_root: None,
             prev_subepoch_summary_hash: constants.genesis_challenge,
             reward_chain_hash: constants.genesis_challenge,
             num_blocks_overflow: 0,
@@ -70,6 +71,7 @@ pub fn make_sub_epoch_summary(
             )
         })?;
     Ok(SubEpochSummary {
+        challenge_merkle_root: None,
         prev_subepoch_summary_hash: included.hash()?,
         reward_chain_hash: *reward_slot_hashes.last().ok_or_else(|| {
             Error::new(

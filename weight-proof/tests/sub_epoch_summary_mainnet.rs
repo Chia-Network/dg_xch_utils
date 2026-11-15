@@ -56,6 +56,7 @@ fn real_sub_epoch_summaries(wp: &WeightProof) -> Vec<SubEpochSummary> {
     let mut out = Vec::with_capacity(wp.sub_epochs.len());
     for d in &wp.sub_epochs {
         let ses = SubEpochSummary {
+            challenge_merkle_root: None,
             prev_subepoch_summary_hash: prev,
             reward_chain_hash: d.reward_chain_hash,
             num_blocks_overflow: d.num_blocks_overflow,
@@ -139,6 +140,7 @@ fn make_sub_epoch_summary_returns_genesis_anchored_first_summary() {
     let prev_prev = ses_block(
         blocks_included_height - 2,
         SubEpochSummary {
+            challenge_merkle_root: None,
             prev_subepoch_summary_hash: Bytes32::default(),
             reward_chain_hash: Bytes32::default(),
             num_blocks_overflow: 0,

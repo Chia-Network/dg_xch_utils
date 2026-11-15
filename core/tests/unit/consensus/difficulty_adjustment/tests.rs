@@ -84,6 +84,7 @@ fn sub_epoch_summary_included_carries_values_forward() {
     let ssi = MAINNET.sub_slot_iters_starting;
     let parent = block(99, 7 * 99, 99 * 10, Some(1_000), ssi, None);
     let ses = crate::blockchain::sub_epoch_summary::SubEpochSummary {
+        challenge_merkle_root: None,
         prev_subepoch_summary_hash: Bytes32::default(),
         reward_chain_hash: Bytes32::default(),
         num_blocks_overflow: 0,
@@ -186,6 +187,7 @@ fn mid_epoch_passes_difficulty_and_ssi_through() {
     let ssi_start = MAINNET.sub_slot_iters_starting;
     let mut blocks = linear_chain(5000, 7, 10_000_000, 1_000, 1, ssi_start);
     let ses = crate::blockchain::sub_epoch_summary::SubEpochSummary {
+        challenge_merkle_root: None,
         prev_subepoch_summary_hash: Bytes32::default(),
         reward_chain_hash: Bytes32::default(),
         num_blocks_overflow: 0,
@@ -373,6 +375,7 @@ fn computed_depth_covers_a_steady_state_epoch_turn() {
     // The previous epoch's sub-epoch summary, a few blocks past the surpass point — the
     // upward scan in get_second_to_last_transaction_block_in_previous_epoch anchors on it.
     let ses = crate::blockchain::sub_epoch_summary::SubEpochSummary {
+        challenge_merkle_root: None,
         prev_subepoch_summary_hash: Bytes32::default(),
         reward_chain_hash: Bytes32::default(),
         num_blocks_overflow: 0,

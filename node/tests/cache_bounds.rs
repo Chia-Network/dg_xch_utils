@@ -7,6 +7,7 @@ use dg_xch_node::BlockRecordCache;
 
 fn ses() -> SubEpochSummary {
     SubEpochSummary {
+        challenge_merkle_root: None,
         prev_subepoch_summary_hash: Bytes32::from([1u8; 32]),
         reward_chain_hash: Bytes32::from([2u8; 32]),
         num_blocks_overflow: 0,

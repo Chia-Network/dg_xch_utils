@@ -43,6 +43,7 @@ fn reconstruct_hash_chain(wp: &WeightProof) -> Vec<String> {
     let mut out = Vec::with_capacity(wp.sub_epochs.len());
     for d in wp.sub_epochs.iter() {
         let ses = SubEpochSummary {
+            challenge_merkle_root: None,
             prev_subepoch_summary_hash: prev,
             reward_chain_hash: d.reward_chain_hash,
             num_blocks_overflow: d.num_blocks_overflow,
@@ -271,6 +272,7 @@ fn phase3_tamper_inflate_boundary_weight_rejects() {
 fn five_field_summary_is_67_bytes() {
     let z = Bytes32::from([0u8; 32]);
     let ses = SubEpochSummary {
+        challenge_merkle_root: None,
         prev_subepoch_summary_hash: z,
         reward_chain_hash: z,
         num_blocks_overflow: 0,

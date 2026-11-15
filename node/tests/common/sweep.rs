@@ -40,6 +40,7 @@ pub fn pending_epoch_boundary(at: u32) -> u32 {
 #[must_use]
 pub fn plain_ses() -> SubEpochSummary {
     SubEpochSummary {
+        challenge_merkle_root: None,
         prev_subepoch_summary_hash: Bytes32::default(),
         reward_chain_hash: Bytes32::default(),
         num_blocks_overflow: 0,

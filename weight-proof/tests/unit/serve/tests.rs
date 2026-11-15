@@ -203,6 +203,7 @@ fn slot_bundle() -> SubSlotBundle {
 
 fn ses(n: u8) -> SubEpochSummary {
     SubEpochSummary {
+        challenge_merkle_root: None,
         prev_subepoch_summary_hash: h32(u32::from(n)),
         reward_chain_hash: h32(1000 + u32::from(n)),
         num_blocks_overflow: n,
@@ -575,6 +576,7 @@ async fn builds_one_segment_per_challenge_block_with_hand_derived_shape() {
 #[tokio::test]
 async fn built_proof_passes_validator_phase2_summary_anchor() {
     let ses0 = SubEpochSummary {
+        challenge_merkle_root: None,
         prev_subepoch_summary_hash: MAINNET.genesis_challenge,
         reward_chain_hash: h32(1000),
         num_blocks_overflow: 3,
@@ -582,6 +584,7 @@ async fn built_proof_passes_validator_phase2_summary_anchor() {
         new_sub_slot_iters: None,
     };
     let ses1 = SubEpochSummary {
+        challenge_merkle_root: None,
         prev_subepoch_summary_hash: ses0.hash().expect("hash ses0"),
         reward_chain_hash: h32(1001),
         num_blocks_overflow: 5,

@@ -158,3 +158,22 @@ fn capability_is_scoped_to_timelord_role() {
     let other = dg_xch_servers::transport::handshake("mainnet", NodeType::FullNode, 0);
     assert!(!other.capabilities.iter().any(|c| c.0 == 6));
 }
+
+#[test]
+fn current_chia_peak_envelope() {
+    let data = fixture();
+    let raw = bytes(data["captured_peak"]["bytes"].as_str().unwrap());
+    let mut cursor = Cursor::new(raw.as_slice());
+    let result = dg_xch_core::protocols::timelord::NewPeakTimelord::from_bytes(
+        &mut cursor,
+        ChiaProtocolVersion::default(),
+    );
+    assert!(result.is_ok(), "offset {}: {:?}", cursor.position(), result);
+    assert_eq!(cursor.position(), raw.len() as u64);
+    let peak = result.unwrap();
+    let mut constants = MAINNET;
+    constants.min_plot_size = 18;
+    constants.hard_fork2_height = 9216;
+    let mut scheduler = dg_xch_timelord::scheduler::Scheduler::new(constants, false, None).unwrap();
+    assert!(scheduler.set_peak(peak).unwrap());
+}

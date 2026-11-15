@@ -26,6 +26,7 @@ fn ses_chain(n: usize, tag: u8) -> Vec<SubEpochSummary> {
         rc[31] = u8::try_from(i).expect("small fixture");
         rc[30] = 0x5e;
         let s = SubEpochSummary {
+            challenge_merkle_root: None,
             prev_subepoch_summary_hash: prev,
             reward_chain_hash: Bytes32::from(rc),
             num_blocks_overflow: 0,

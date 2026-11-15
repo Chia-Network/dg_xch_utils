@@ -230,6 +230,7 @@ fn map_sub_epoch_summaries(
 
     for (idx, data) in sub_epoch_data.iter().enumerate() {
         let ses = SubEpochSummary {
+            challenge_merkle_root: None,
             prev_subepoch_summary_hash: prev_ses_hash,
             reward_chain_hash: data.reward_chain_hash,
             num_blocks_overflow: data.num_blocks_overflow,

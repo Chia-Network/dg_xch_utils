@@ -1163,6 +1163,7 @@ mod tests {
         state.deficit = 0;
         state.passed_summary_height = true;
         state.summary = Some(SubEpochSummary {
+            challenge_merkle_root: None,
             prev_subepoch_summary_hash: Bytes32::from([1; 32]),
             reward_chain_hash: Bytes32::from([2; 32]),
             num_blocks_overflow: 0,

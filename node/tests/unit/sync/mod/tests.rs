@@ -7,6 +7,7 @@ use dg_xch_core::blockchain::sub_epoch_summary::SubEpochSummary;
 
 fn ses(new_difficulty: Option<u64>, new_sub_slot_iters: Option<u64>) -> SubEpochSummary {
     SubEpochSummary {
+        challenge_merkle_root: None,
         prev_subepoch_summary_hash: Bytes32::default(),
         reward_chain_hash: Bytes32::default(),
         num_blocks_overflow: 0,

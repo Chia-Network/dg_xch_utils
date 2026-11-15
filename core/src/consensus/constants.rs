@@ -133,9 +133,25 @@ pub struct ConsensusConstants {
     // plot may choose, the v1 phase out window, and the v2 plot filter with its own schedule
     pub number_zero_bits_plot_filter_v2: u8,
     pub plot_size_v2: u8,
+    #[serde(
+        default = "default_filter_window_size",
+        skip_serializing_if = "is_default_filter_window_size"
+    )]
     pub filter_window_size: u8,
+    #[serde(
+        default = "default_max_effective_plot_filter_bits",
+        skip_serializing_if = "is_default_max_effective_plot_filter_bits"
+    )]
     pub max_effective_plot_filter_bits: u8,
+    #[serde(
+        default = "default_plot_filter_v2_relative_height",
+        skip_serializing_if = "is_default_plot_filter_v2_relative_height"
+    )]
     pub plot_filter_v2_relative_height: [u32; 9],
+    #[serde(
+        default = "default_plot_filter_v2_relative_height_count",
+        skip_serializing_if = "is_default_plot_filter_v2_relative_height_count"
+    )]
     pub plot_filter_v2_relative_height_count: u8,
     pub min_plot_strength: u8,
     pub max_plot_strength: u8,
@@ -521,3 +537,31 @@ pub const FARMER_REWARD_PREFIXES: [(Bytes32, Bytes32); 10] = [
         get_farmer_reward_prefix(&TESTNET_11),
     ),
 ];
+
+fn default_filter_window_size() -> u8 {
+    MAINNET.filter_window_size
+}
+fn is_default_filter_window_size(value: &u8) -> bool {
+    *value == default_filter_window_size()
+}
+
+fn default_max_effective_plot_filter_bits() -> u8 {
+    MAINNET.max_effective_plot_filter_bits
+}
+fn is_default_max_effective_plot_filter_bits(value: &u8) -> bool {
+    *value == default_max_effective_plot_filter_bits()
+}
+
+fn default_plot_filter_v2_relative_height() -> [u32; 9] {
+    MAINNET.plot_filter_v2_relative_height
+}
+fn is_default_plot_filter_v2_relative_height(value: &[u32; 9]) -> bool {
+    *value == default_plot_filter_v2_relative_height()
+}
+
+fn default_plot_filter_v2_relative_height_count() -> u8 {
+    MAINNET.plot_filter_v2_relative_height_count
+}
+fn is_default_plot_filter_v2_relative_height_count(value: &u8) -> bool {
+    *value == default_plot_filter_v2_relative_height_count()
+}

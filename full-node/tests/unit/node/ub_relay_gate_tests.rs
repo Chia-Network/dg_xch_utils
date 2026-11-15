@@ -85,6 +85,7 @@ fn build_records(chain: &[HeaderBlock]) -> Vec<BlockRecord> {
             deficit = ss.reward_chain.deficit;
             if let Some(ses_hash) = ss.challenge_chain.subepoch_summary_hash {
                 ses = Some(SubEpochSummary {
+                    challenge_merkle_root: None,
                     prev_subepoch_summary_hash: ses_hash,
                     reward_chain_hash: ses_hash,
                     num_blocks_overflow: 0,

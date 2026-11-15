@@ -71,6 +71,7 @@ fn chain(low: u32, high: u32) -> HashMap<Bytes32, BlockRecord> {
     let mut blocks = HashMap::new();
     for h in low..=high {
         let ses = (h == ses_height).then(|| SubEpochSummary {
+            challenge_merkle_root: None,
             prev_subepoch_summary_hash: Bytes32::default(),
             reward_chain_hash: Bytes32::default(),
             num_blocks_overflow: 0,

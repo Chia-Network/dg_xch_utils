@@ -272,6 +272,7 @@ const WEIGHT_BASE: u128 = 1_000_000; // common::RESTAMP_BASE_WEIGHT — records 
 
 fn ses() -> SubEpochSummary {
     SubEpochSummary {
+        challenge_merkle_root: None,
         prev_subepoch_summary_hash: Bytes32::default(),
         reward_chain_hash: Bytes32::default(),
         num_blocks_overflow: 0,
