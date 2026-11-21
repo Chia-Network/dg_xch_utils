@@ -34,7 +34,11 @@ fn chia_wire_hash_quality_and_iteration_vectors() {
     c.number_zero_bits_plot_filter_v2 = 7;
     c.max_plot_strength = 9;
     c.difficulty_constant_factor = 10052721566054;
-    c.plot_filter_v2_relative_height = [33000, 30000, 27000, 24000, 21000, 18000, 9216, 6144, 3072];
+    c.plot_filter_v2_relative_height =
+        dg_xch_core::consensus::filter_schedule::FilterSchedule::try_from_slice(&[
+            33000, 30000, 27000, 24000, 21000, 18000, 9216, 6144, 3072,
+        ])
+        .unwrap();
     let first = &data["rows"][0];
     let mut pos: ProofOfSpace =
         serde_json::from_value(first["reward_block"]["proof_of_space"].clone()).unwrap();
@@ -190,7 +194,11 @@ fn captured_peer_sequence_schedules_real_unfinished_blocks() {
     c.number_zero_bits_plot_filter_v2 = 7;
     c.max_plot_strength = 9;
     c.difficulty_constant_factor = 10052721566054;
-    c.plot_filter_v2_relative_height = [33000, 30000, 27000, 24000, 21000, 18000, 9216, 6144, 3072];
+    c.plot_filter_v2_relative_height =
+        dg_xch_core::consensus::filter_schedule::FilterSchedule::try_from_slice(&[
+            33000, 30000, 27000, 24000, 21000, 18000, 9216, 6144, 3072,
+        ])
+        .unwrap();
     let mut scheduler = dg_xch_timelord::scheduler::Scheduler::new(c, false, None).unwrap();
     let mut scheduled = 0;
     for message in data["peer_sequence"].as_array().unwrap() {

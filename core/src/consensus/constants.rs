@@ -53,6 +53,7 @@ impl ChiaNetwork {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConsensusConstants {
     #[serde(default)]
     pub rewards: crate::consensus::block_rewards::RewardSchedule,
@@ -147,12 +148,7 @@ pub struct ConsensusConstants {
         default = "default_plot_filter_v2_relative_height",
         skip_serializing_if = "is_default_plot_filter_v2_relative_height"
     )]
-    pub plot_filter_v2_relative_height: [u32; 9],
-    #[serde(
-        default = "default_plot_filter_v2_relative_height_count",
-        skip_serializing_if = "is_default_plot_filter_v2_relative_height_count"
-    )]
-    pub plot_filter_v2_relative_height_count: u8,
+    pub plot_filter_v2_relative_height: super::filter_schedule::FilterSchedule,
     pub min_plot_strength: u8,
     pub max_plot_strength: u8,
     pub plot_v1_phase_out_epoch_bits: u8,
@@ -257,12 +253,9 @@ pub const MAINNET: ConsensusConstants = ConsensusConstants {
     plot_filter_32_height: 20_643_000,
     number_zero_bits_plot_filter_v2: 5,
     plot_size_v2: 28,
-    plot_filter_v2_relative_height_count: 9,
     filter_window_size: 16,
     max_effective_plot_filter_bits: 13,
-    plot_filter_v2_relative_height: [
-        50494000, 45444000, 40394000, 35343000, 30298000, 25247000, 20197000, 15146000, 10101000,
-    ],
+    plot_filter_v2_relative_height: super::filter_schedule::LEGACY_SCHEDULE,
     min_plot_strength: 2,
     max_plot_strength: 32,
     plot_v1_phase_out_epoch_bits: 8,
@@ -539,29 +532,50 @@ pub const FARMER_REWARD_PREFIXES: [(Bytes32, Bytes32); 10] = [
 ];
 
 fn default_filter_window_size() -> u8 {
-    MAINNET.filter_window_size
+    super::filter_schedule::LEGACY_FILTER_WINDOW_SIZE
 }
 fn is_default_filter_window_size(value: &u8) -> bool {
     *value == default_filter_window_size()
 }
 
 fn default_max_effective_plot_filter_bits() -> u8 {
-    MAINNET.max_effective_plot_filter_bits
+    super::filter_schedule::LEGACY_MAX_EFFECTIVE_PLOT_FILTER_BITS
 }
 fn is_default_max_effective_plot_filter_bits(value: &u8) -> bool {
     *value == default_max_effective_plot_filter_bits()
 }
 
-fn default_plot_filter_v2_relative_height() -> [u32; 9] {
-    MAINNET.plot_filter_v2_relative_height
+fn default_plot_filter_v2_relative_height() -> super::filter_schedule::FilterSchedule {
+    super::filter_schedule::LEGACY_SCHEDULE
 }
-fn is_default_plot_filter_v2_relative_height(value: &[u32; 9]) -> bool {
-    *value == default_plot_filter_v2_relative_height()
+fn is_default_plot_filter_v2_relative_height(
+    value: &super::filter_schedule::FilterSchedule,
+) -> bool {
+    *value == super::filter_schedule::LEGACY_SCHEDULE
 }
 
-fn default_plot_filter_v2_relative_height_count() -> u8 {
-    MAINNET.plot_filter_v2_relative_height_count
-}
-fn is_default_plot_filter_v2_relative_height_count(value: &u8) -> bool {
-    *value == default_plot_filter_v2_relative_height_count()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn removed_plot_filter_count_field_is_rejected() {
+        let constants = ConsensusConstants {
+            difficulty_constant_factor: 1u128 << 60,
+            ..MAINNET
+        };
+        let mut value = serde_json::to_value(constants).unwrap();
+        // ConsensusConstants borrows a static bech32 prefix, so bind the input to 'static.
+        let valid = Box::leak(value.to_string().into_boxed_str());
+        assert!(serde_json::from_str::<ConsensusConstants>(valid).is_ok());
+        value.as_object_mut().unwrap().insert(
+            "plot_filter_v2_relative_height_count".into(),
+            serde_json::json!(7),
+        );
+        let json = Box::leak(value.to_string().into_boxed_str());
+        assert!(
+            serde_json::from_str::<ConsensusConstants>(json).is_err(),
+            "fork-era count must not silently reshape the schedule"
+        );
+    }
 }
