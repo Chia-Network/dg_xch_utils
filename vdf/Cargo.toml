@@ -10,7 +10,7 @@ repository.workspace = true
 
 [dependencies]
 dg_xch_core = { path = "../core", version = "3.0.0", default-features = false }
-num-bigint = "0.4.6"
+num-bigint = "0.5.1"
 num-integer = "0.1.46"
 num-traits = "0.2.19"
 rug = { version = "1.28", default-features = false, features = ["integer", "std"] }

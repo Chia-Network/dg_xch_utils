@@ -36,7 +36,7 @@ rayon = "1.11"
 
 [dev-dependencies]
 hex = "0.4.3"
-num-bigint = "0.4.6"
+num-bigint = "0.5.1"
 # serve.rs tests drive the async builder against an in-memory BlockStore double.
 tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros", "sync"] }
 async-trait = "0.1.89"
