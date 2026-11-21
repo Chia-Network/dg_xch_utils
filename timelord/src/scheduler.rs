@@ -128,11 +128,14 @@ pub struct Scheduler {
     generation: u64,
     last_peak: Option<Bytes32>,
     transaction_height: Option<u32>,
+    last_transaction: Option<(u32, Bytes32)>,
     rewards: VecDeque<(Bytes32, u128)>,
     candidates: BTreeMap<[u8; 32], Candidate>,
+    deferred: BTreeMap<[u8; 32], NewUnfinishedBlockTimelord>,
     signage: HashSet<u8>,
     infused: HashSet<Bytes32>,
     awaiting_peak: Option<Instant>,
+    retry_outcomes: Vec<(Bytes32, Result<Admission, String>)>,
 }
 
 impl Scheduler {
@@ -153,6 +156,7 @@ impl Scheduler {
         {
             return Err(invalid("invalid regular timelord parameters"));
         }
+        dg_xch_core::consensus::pot_iterations::validate_timelord_filter_parameters(&constants)?;
         Self::validate_timing(
             &constants,
             constants.difficulty_starting,
@@ -166,11 +170,14 @@ impl Scheduler {
             generation: 0,
             last_peak: None,
             transaction_height: None,
+            last_transaction: None,
             rewards: VecDeque::new(),
             candidates: BTreeMap::new(),
+            deferred: BTreeMap::new(),
             signage: HashSet::new(),
             infused: HashSet::new(),
             awaiting_peak: None,
+            retry_outcomes: Vec::new(),
         })
     }
 
@@ -226,6 +233,7 @@ impl Scheduler {
         }
         self.reset_generation()?;
         self.transaction_height = Some(0);
+        self.last_transaction = Some((0, message.genesis_challenge));
         self.rewards.push_back((message.genesis_challenge, 0));
         self.state = Some(State {
             total_iters: 0,
@@ -338,11 +346,13 @@ impl Scheduler {
             .state
             .as_ref()
             .is_some_and(|state| state.new_epoch && state.slot_start == slot_start);
-        if block.is_transaction_block {
-            self.transaction_height = Some(block.height);
-        } else if !contiguous {
-            self.transaction_height = None;
-        }
+        self.update_transaction_context(
+            block.is_transaction_block,
+            block.height,
+            hash,
+            &rewards,
+            contiguous,
+        );
         self.reset_generation()?;
         self.last_peak = Some(hash);
         self.rewards = rewards;
@@ -373,6 +383,16 @@ impl Scheduler {
             anchor: Instant::now(),
         });
         self.prune_candidates();
+        // Every new peak re-evaluates deferred work. Old/reorged candidates are
+        // discarded by the normal state checks, without stopping other work.
+        let deferred = std::mem::take(&mut self.deferred);
+        self.retry_outcomes.clear();
+        for (key, candidate) in deferred {
+            let result = self
+                .admit_unfinished(candidate)
+                .map_err(|error| error.to_string());
+            self.retry_outcomes.push((Bytes32::const_new(key), result));
+        }
         Ok(true)
     }
 
@@ -410,140 +430,6 @@ impl Scheduler {
                         .is_some_and(|(hash, _)| *hash == candidate.rc_prev)
             });
         }
-    }
-
-    pub fn add_unfinished(&mut self, message: NewUnfinishedBlockTimelord) -> Result<bool, Error> {
-        let Some(state) = &self.state else {
-            return Ok(false);
-        };
-        let block = &message.reward_chain_block;
-        let hash = block.hash()?;
-        if self.candidates.contains_key(&hash.const_bytes()) || self.infused.contains(&hash) {
-            return Ok(false);
-        }
-        if self.candidates.len() >= self.reward_limit()
-            || message.difficulty != state.difficulty
-            || message.sub_slot_iters != state.sub_slot_iters
-        {
-            return Ok(false);
-        }
-        let height = match state.height {
-            Some(height) => height
-                .checked_add(1)
-                .ok_or_else(|| invalid("chain height overflow"))?,
-            None => 0,
-        };
-        let signage_hash = match block.challenge_chain_sp_vdf {
-            Some(info) if block.signage_point_index != 0 => info.output.hash()?,
-            None if block.signage_point_index == 0 => block.pos_ss_cc_challenge_hash,
-            _ => return Err(invalid("invalid unfinished signage-point fields")),
-        };
-        let quality = if block.proof_of_space.version == 1 {
-            block.proof_of_space.chia_timelord_quality(
-                &self.constants,
-                block.pos_ss_cc_challenge_hash,
-                signage_hash,
-            )
-        } else {
-            dg_xch_pos::verify_and_get_quality_string_without_activation(
-                &block.proof_of_space,
-                &self.constants,
-                block.pos_ss_cc_challenge_hash,
-                signage_hash,
-                height,
-            )
-        }
-        .ok_or_else(|| invalid("unfinished block proof of space is invalid"))?;
-        if !verify_plot_signature(
-            &block.proof_of_space.plot_public_key,
-            signage_hash,
-            &block.challenge_chain_sp_signature,
-        ) {
-            return Err(invalid("unfinished block signage signature is invalid"));
-        }
-        let required = dg_xch_core::consensus::pot_iterations::calculate_timelord_iterations(
-            &self.constants,
-            &block.proof_of_space,
-            quality,
-            message.difficulty,
-            signage_hash,
-            self.transaction_height.unwrap_or(height),
-        )?;
-        let offset = calculate_ip_iters(
-            &self.constants,
-            message.sub_slot_iters,
-            block.signage_point_index,
-            required,
-        )?;
-        let signage_offset = calculate_sp_iters(
-            &self.constants,
-            message.sub_slot_iters,
-            block.signage_point_index,
-        )?;
-        if block.challenge_chain_sp_vdf.is_some_and(|info| {
-            info.challenge != block.pos_ss_cc_challenge_hash
-                || info.number_of_iterations != signage_offset
-        }) {
-            return Err(invalid(
-                "unfinished challenge signage VDF metadata mismatch",
-            ));
-        }
-        let reward_signage_hash = match block.reward_chain_sp_vdf {
-            Some(info) if block.signage_point_index != 0 && info.challenge == message.rc_prev => {
-                info.output.hash()?
-            }
-            None if block.signage_point_index == 0 => message.rc_prev,
-            _ => return Err(invalid("invalid unfinished reward signage-point fields")),
-        };
-        if !verify_plot_signature(
-            &block.proof_of_space.plot_public_key,
-            reward_signage_hash,
-            &block.reward_chain_sp_signature,
-        ) {
-            return Err(invalid("unfinished reward signage signature is invalid"));
-        }
-        let overflow = is_overflow_block(&self.constants, block.signage_point_index)?;
-        let slot_start = block
-            .total_iters
-            .checked_sub(u128::from(offset))
-            .ok_or_else(|| invalid("unfinished block iteration underflow"))?;
-        let next_slot = state.end()?;
-        if block.total_iters <= state.total_iters
-            || (slot_start != state.slot_start && !(overflow && slot_start == next_slot))
-            || (overflow && state.new_epoch && slot_start == state.slot_start)
-        {
-            return Ok(false);
-        }
-        if (!overflow || slot_start == next_slot)
-            && block.pos_ss_cc_challenge_hash != state.challenge.challenge
-        {
-            return Ok(false);
-        }
-        let signage_total_iters = slot_start
-            .checked_add(u128::from(signage_offset))
-            .and_then(|total| {
-                if overflow {
-                    total.checked_sub(u128::from(message.sub_slot_iters))
-                } else {
-                    Some(total)
-                }
-            })
-            .ok_or_else(|| invalid("unfinished signage iteration overflow"))?;
-        if !self.reward_matches(message.rc_prev, signage_total_iters) {
-            return Ok(false);
-        }
-        self.candidates.insert(
-            hash.const_bytes(),
-            Candidate {
-                hash,
-                total_iters: block.total_iters,
-                overflow,
-                slot_start,
-                rc_prev: message.rc_prev,
-                signage_total_iters,
-            },
-        );
-        Ok(true)
     }
 
     pub fn next_plan(&self) -> Result<Option<WorkPlan>, Error> {
@@ -1242,3 +1128,10 @@ mod tests {
         );
     }
 }
+
+mod admission;
+pub use admission::Admission;
+
+#[cfg(test)]
+#[path = "scheduler/context_tests.rs"]
+mod context_tests;

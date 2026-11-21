@@ -3,7 +3,13 @@ use dg_xch_core::{
         challenge_block_info::ChallengeBlockInfo, proof_of_space::ProofOfSpace,
         reward_chain_block::RewardChainBlock, sized_bytes::Bytes32,
     },
-    consensus::{constants::MAINNET, pot_iterations::calculate_timelord_iterations},
+    consensus::{
+        constants::{ConsensusConstants, MAINNET},
+        filter_schedule::FilterSchedule,
+        pot_iterations::{
+            TxContext, calculate_timelord_iterations, timelord_iterations_with_context,
+        },
+    },
     protocols::{NodeType, timelord::NewUnfinishedBlockTimelord},
 };
 use dg_xch_serialize::{ChiaProtocolVersion, ChiaSerialize};
@@ -159,6 +165,14 @@ fn chia_wire_hash_quality_and_iteration_vectors() {
 #[test]
 fn capability_is_scoped_to_timelord_role() {
     let enabled = dg_xch_servers::transport::handshake("mainnet", NodeType::Timelord, 0);
+    assert_eq!(
+        enabled
+            .capabilities
+            .iter()
+            .filter(|capability| capability.0 == 6)
+            .count(),
+        1
+    );
     assert!(enabled.capabilities.contains(&(6, "1".to_owned())));
     let other = dg_xch_servers::transport::handshake("mainnet", NodeType::FullNode, 0);
     assert!(!other.capabilities.iter().any(|c| c.0 == 6));
@@ -220,4 +234,108 @@ fn captured_peer_sequence_schedules_real_unfinished_blocks() {
         assert_eq!(cursor.position(), raw.len() as u64);
     }
     assert!(scheduled > 0);
+}
+
+fn context_fixture() -> (ConsensusConstants, ProofOfSpace, Bytes32, Bytes32) {
+    let data = fixture();
+    let first = &data["rows"][0];
+    let mut pos: ProofOfSpace =
+        serde_json::from_value(first["reward_block"]["proof_of_space"].clone()).unwrap();
+    let mut c = MAINNET;
+    c.hard_fork2_height = 9216;
+    c.number_zero_bits_plot_filter_v2 = 7;
+    c.max_effective_plot_filter_bits = 13;
+    c.difficulty_constant_factor = 10052721566054;
+    c.plot_filter_v2_relative_height = FilterSchedule::try_from_slice(&[
+        33000, 30000, 27000, 24000, 21000, 18000, 9216, 6144, 3072,
+    ])
+    .unwrap();
+    pos.strength = 9;
+    let q = hash(&first["quality"]);
+    let sp = hash(&first["signage_hash"]);
+    (c, pos, q, sp)
+}
+
+fn context(known: Option<u32>, lower: u32, upper: u32) -> TxContext {
+    TxContext {
+        known,
+        lower,
+        upper,
+    }
+}
+
+#[test]
+fn unknown_transaction_context_requires_an_invariant_target() {
+    let (c, pos, q, sp) = context_fixture();
+    let before =
+        timelord_iterations_with_context(&c, &pos, q, 536, sp, context(Some(12287), 0, 12288))
+            .unwrap()
+            .unwrap();
+    let after =
+        timelord_iterations_with_context(&c, &pos, q, 536, sp, context(Some(12288), 0, 12288))
+            .unwrap()
+            .unwrap();
+    assert_ne!(before, after);
+    assert_eq!(
+        timelord_iterations_with_context(&c, &pos, q, 536, sp, context(None, 0, 12288)).unwrap(),
+        None
+    );
+    let mut low_strength = pos;
+    low_strength.strength = 2;
+    assert!(
+        timelord_iterations_with_context(&c, &low_strength, q, 536, sp, context(None, 0, 50_000))
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn a_boundary_below_the_known_lower_bound_does_not_defer() {
+    let (c, pos, q, sp) = context_fixture();
+    let at_lower =
+        timelord_iterations_with_context(&c, &pos, q, 536, sp, context(Some(12288), 0, 12288))
+            .unwrap()
+            .unwrap();
+    // The 12288 boundary is not strictly above lower, so only the target at lower matters.
+    assert_eq!(
+        timelord_iterations_with_context(&c, &pos, q, 536, sp, context(None, 12288, 13_000))
+            .unwrap(),
+        Some(at_lower)
+    );
+}
+
+#[test]
+fn a_boundary_inside_the_unknown_range_still_defers() {
+    let (c, pos, q, sp) = context_fixture();
+    let at_lower =
+        timelord_iterations_with_context(&c, &pos, q, 536, sp, context(Some(12287), 0, 12287))
+            .unwrap()
+            .unwrap();
+    // The 12288 boundary lies in (12287, 12288], and changes the target.
+    assert_eq!(
+        timelord_iterations_with_context(&c, &pos, q, 536, sp, context(None, 12287, 12288))
+            .unwrap(),
+        None
+    );
+    assert_ne!(
+        timelord_iterations_with_context(&c, &pos, q, 536, sp, context(Some(12288), 0, 12288))
+            .unwrap()
+            .unwrap(),
+        at_lower
+    );
+}
+
+#[test]
+fn a_boundary_at_the_candidate_height_does_not_defer() {
+    let (c, pos, q, sp) = context_fixture();
+    let before =
+        timelord_iterations_with_context(&c, &pos, q, 536, sp, context(Some(12287), 0, 12287))
+            .unwrap()
+            .unwrap();
+    // Candidate height is peak + 1 = 12288, so the scheduler's upper bound is the peak (12287).
+    assert_eq!(
+        timelord_iterations_with_context(&c, &pos, q, 536, sp, context(None, 12287, 12287))
+            .unwrap(),
+        Some(before)
+    );
 }
