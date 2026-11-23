@@ -4,7 +4,8 @@
 [advisories]
 ignore = [
     # dg_xch_core now uses rsa 0.10, which is not affected; the remaining rsa 0.9 in Cargo.lock
-    # comes only from sqlx-mysql for the optional `mysql` feature. Drop this ID once sqlx no
-    # longer depends on rsa 0.9.
+    # comes only from sqlx-mysql for the optional `mysql` feature. sqlx-mysql only uses rsa 0.9
+    # for public-key (OAEP) password encryption, so no private-key timing oracle exists. Drop
+    # this ID once sqlx no longer depends on rsa 0.9.
     "RUSTSEC-2023-0071",
 ]

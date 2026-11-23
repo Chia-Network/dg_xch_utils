@@ -37,6 +37,7 @@ rand = "0.10.0"
 regex = "1.12.3"
 rustls = {version = "0.23.45" }
 rustls-pemfile = "2.2.0"
+# "getrandom" is required: rsa 0.10 only blinds RSA signing (pkcs1v15::SigningKey via x509-cert Builder::build) when it is enabled.
 rsa = { version = "0.10.0", default-features = false, features = ["std", "encoding", "getrandom", "pkcs1v15"] }
 secrecy = "0.10.3"
 serde = { version = "1.0.228", features = ["derive"] }
