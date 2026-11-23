@@ -318,7 +318,6 @@ pub fn generate_ca_signed_cert_data_for_host(
     key_data: &[u8],
     host: &str,
 ) -> Result<(Vec<u8>, Vec<u8>), Error> {
-    validate_ssl_cert_and_key(cert_data, key_data)?;
     certificate::issue_node(cert_data, key_data, host)
 }
 

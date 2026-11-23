@@ -1,6 +1,6 @@
 //! X.509 certificate construction for the Chia TLS identities.
 
-use std::io::Error;
+use std::io;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 
@@ -15,7 +15,7 @@ use x509_cert::Certificate;
 use x509_cert::builder::profile::BuilderProfile;
 use x509_cert::builder::{Builder, CertificateBuilder};
 use x509_cert::certificate::TbsCertificate;
-use x509_cert::der::asn1::{Ia5String, OctetString, UtcTime};
+use x509_cert::der::asn1::{Ia5String, OctetString};
 use x509_cert::der::pem::LineEnding;
 use x509_cert::der::{DateTime, DecodePem, EncodePem};
 use x509_cert::ext::pkix::name::GeneralName;
@@ -44,8 +44,8 @@ const CA_NOT_BEFORE: DateTime = match DateTime::new(1970, 1, 1, 0, 0, 0) {
 const ONE_DAY: Duration = Duration::from_secs(24 * 60 * 60);
 const CA_LIFETIME: Duration = Duration::from_secs(3650 * 24 * 60 * 60);
 
-/// Minimal profile because x509-cert's CABF and DevID profiles reject our
-/// names (they use OU without C), which requires a custom profile.
+/// Builder profile for Chia identities. x509-cert's CABF and DevID profiles reject
+/// names with OU and no C.
 struct ChiaProfile {
     issuer: Name,
     subject: Name,
@@ -80,11 +80,12 @@ impl BuilderProfile for ChiaProfile {
                 .to_extension(tbs.subject(), &extensions)?,
         );
 
-        let (ca, key_usage) = match &self.role {
-            Role::Ca => (true, KeyUsage(KeyUsages::KeyCertSign | KeyUsages::CRLSign)),
-            Role::Node(_) => (
+        let (ca, key_usage, san) = match &self.role {
+            Role::Ca => (true, KeyUsages::KeyCertSign | KeyUsages::CRLSign, None),
+            Role::Node(san) => (
                 false,
-                KeyUsage(KeyUsages::DigitalSignature | KeyUsages::NonRepudiation),
+                KeyUsages::DigitalSignature | KeyUsages::NonRepudiation,
+                Some(san),
             ),
         };
         extensions.push(
@@ -94,9 +95,8 @@ impl BuilderProfile for ChiaProfile {
             }
             .to_extension(tbs.subject(), &extensions)?,
         );
-        extensions.push(key_usage.to_extension(tbs.subject(), &extensions)?);
-
-        if let Role::Node(san) = &self.role {
+        extensions.push(KeyUsage(key_usage).to_extension(tbs.subject(), &extensions)?);
+        if let Some(san) = san {
             extensions.push(san.to_extension(tbs.subject(), &extensions)?);
         }
 
@@ -108,7 +108,8 @@ pub(super) fn issue_node(
     ca_cert_pem: &[u8],
     ca_key_pem: &[u8],
     host: &str,
-) -> Result<(Vec<u8>, Vec<u8>), std::io::Error> {
+) -> io::Result<(Vec<u8>, Vec<u8>)> {
+    super::validate_ssl_cert_and_key(ca_cert_pem, ca_key_pem)?;
     let ca_cert = Certificate::from_pem(ca_cert_pem).map_err(other)?;
     let ca_key = decode_ca_key(ca_key_pem)?;
     let issuer = ca_cert.tbs_certificate().subject().clone();
@@ -116,49 +117,55 @@ pub(super) fn issue_node(
     let now = SystemTime::now();
     let not_before = now
         .checked_sub(ONE_DAY)
-        .ok_or_else(|| Error::other("system clock is before the Unix epoch"))?;
-    let validity = Validity::new(utc_system_time(not_before)?, utc_date_time(NODE_NOT_AFTER)?);
+        .ok_or_else(|| io::Error::other("system clock is before the Unix epoch"))?;
+    let validity = Validity::new(
+        Time::try_from(not_before).map_err(other)?,
+        NODE_NOT_AFTER.into(),
+    );
 
     issue(
         Role::Node(subject_alt_names(host)?),
-        issuer,
         subject,
         validity,
-        Some(ca_key),
+        Some((issuer, ca_key)),
     )
 }
 
-pub(super) fn issue_ca() -> Result<(Vec<u8>, Vec<u8>), std::io::Error> {
+pub(super) fn issue_ca() -> io::Result<(Vec<u8>, Vec<u8>)> {
     let name = Name::from_str(CA_SUBJECT).map_err(other)?;
     let now = SystemTime::now();
     let not_after = now
         .checked_add(CA_LIFETIME)
-        .ok_or_else(|| Error::other("system clock overflow"))?;
-    let validity = Validity::new(utc_date_time(CA_NOT_BEFORE)?, utc_system_time(not_after)?);
+        .ok_or_else(|| io::Error::other("system clock overflow"))?;
+    let validity = Validity::new(
+        CA_NOT_BEFORE.into(),
+        Time::try_from(not_after).map_err(other)?,
+    );
 
-    issue(Role::Ca, name.clone(), name, validity, None)
+    issue(Role::Ca, name, validity, None)
 }
 
+/// `None` signs with the newly generated key (self-signed).
 fn issue(
     role: Role,
-    issuer: Name,
     subject: Name,
     validity: Validity,
-    issuer_key: Option<PrivateKey>,
-) -> Result<(Vec<u8>, Vec<u8>), std::io::Error> {
+    issuer: Option<(Name, PrivateKey)>,
+) -> io::Result<(Vec<u8>, Vec<u8>)> {
     let mut rng = SysRng;
     let key = PrivateKey::new(&mut rng, RSA_KEY_BITS).map_err(other)?;
     let public_key = key.to_public_key();
     let spki = SubjectPublicKeyInfo::from_key(&public_key).map_err(other)?;
     let serial = SerialNumber::from(rng.try_next_u32().map_err(other)?);
+    let key_pem = key.to_pkcs8_pem(LineEnding::default()).map_err(other)?;
+    let (issuer, signing_key) = issuer.unwrap_or_else(|| (subject.clone(), key));
     let profile = ChiaProfile {
         issuer,
         subject,
         role,
     };
     let builder = CertificateBuilder::new(profile, serial, validity, spki).map_err(other)?;
-    let key_pem = key.to_pkcs8_pem(LineEnding::default()).map_err(other)?;
-    let signing_key = SigningKey::<Sha256>::new(issuer_key.unwrap_or(key));
+    let signing_key = SigningKey::<Sha256>::new(signing_key);
     let certificate = builder
         .build::<_, rsa::pkcs1v15::Signature>(&signing_key)
         .map_err(other)?;
@@ -167,14 +174,14 @@ fn issue(
     Ok((cert_pem.into_bytes(), key_pem.as_bytes().to_vec()))
 }
 
-fn decode_ca_key(pem: &[u8]) -> Result<PrivateKey, std::io::Error> {
+fn decode_ca_key(pem: &[u8]) -> io::Result<PrivateKey> {
     let pem = String::from_utf8_lossy(pem);
     PrivateKey::from_pkcs1_pem(&pem)
         .or_else(|_| PrivateKey::from_pkcs8_pem(&pem))
-        .map_err(|e| Error::other(format!("Failed to load Root Key: {e:?}")))
+        .map_err(|e| io::Error::other(format!("Failed to load Root Key: {e:?}")))
 }
 
-fn subject_alt_names(host: &str) -> Result<SubjectAltName, std::io::Error> {
+fn subject_alt_names(host: &str) -> io::Result<SubjectAltName> {
     let mut names = vec![GeneralName::DnsName(Ia5String::new(host).map_err(other)?)];
     if host == "localhost" {
         names.push(GeneralName::IpAddress(
@@ -187,18 +194,8 @@ fn subject_alt_names(host: &str) -> Result<SubjectAltName, std::io::Error> {
     Ok(SubjectAltName(names))
 }
 
-fn utc_date_time(time: DateTime) -> Result<Time, std::io::Error> {
-    Ok(Time::UtcTime(UtcTime::from_date_time(time).map_err(other)?))
-}
-
-fn utc_system_time(time: SystemTime) -> Result<Time, std::io::Error> {
-    Ok(Time::UtcTime(
-        UtcTime::from_system_time(time).map_err(other)?,
-    ))
-}
-
-fn other(e: impl core::fmt::Debug) -> std::io::Error {
-    std::io::Error::other(format!("{e:?}"))
+fn other(e: impl core::fmt::Debug) -> io::Error {
+    io::Error::other(format!("{e:?}"))
 }
 
 #[cfg(test)]
@@ -212,16 +209,16 @@ mod tests {
     use rsa::pkcs8::DecodePublicKey;
     use rsa::signature::Verifier;
     use rsa::traits::PublicKeyParts;
-    use x509_cert::der::Encode;
-    use x509_cert::der::asn1::ObjectIdentifier;
+    use x509_cert::der::asn1::{ObjectIdentifier, Utf8StringRef};
     use x509_cert::der::oid::AssociatedOid;
     use x509_cert::der::referenced::OwnedToRef;
+    use x509_cert::der::{Encode, Tag, Tagged};
     use x509_cert::{AlgorithmIdentifier, Version};
 
     const SHA256_WITH_RSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.11");
 
     struct Expected {
-        subject: &'static str,
+        subject: [&'static str; 3],
         ca: bool,
         key_usage: KeyUsage,
         san: Option<Vec<GeneralName>>,
@@ -232,6 +229,32 @@ mod tests {
     enum Bound {
         Exact(DateTime),
         Near(SystemTime),
+    }
+
+    fn node_expected(san: Vec<GeneralName>) -> Expected {
+        Expected {
+            subject: ["Organic Farming Division", "Chia", "Chia"],
+            ca: false,
+            key_usage: KeyUsage(KeyUsages::DigitalSignature | KeyUsages::NonRepudiation),
+            san: Some(san),
+            not_before: Bound::Near(SystemTime::now() - Duration::from_secs(86_400)),
+            not_after: Bound::Exact(
+                DateTime::new(2049, 8, 2, 0, 0, 0).expect("valid node certificate expiry"),
+            ),
+        }
+    }
+
+    fn ca_expected() -> Expected {
+        Expected {
+            subject: ["Organic Farming Division", "Chia", "Chia CA"],
+            ca: true,
+            key_usage: KeyUsage(KeyUsages::KeyCertSign | KeyUsages::CRLSign),
+            san: None,
+            not_before: Bound::Exact(
+                DateTime::new(1970, 1, 1, 0, 0, 0).expect("valid CA certificate start"),
+            ),
+            not_after: Bound::Near(SystemTime::now() + Duration::from_secs(3650 * 86_400)),
+        }
     }
 
     fn parse(pem: &[u8]) -> Certificate {
@@ -260,7 +283,7 @@ mod tests {
     }
 
     fn assert_rsa_public_key(key: &PublicKey) {
-        assert_eq!(key.size(), RSA_KEY_BITS / 8);
+        assert_eq!(key.size(), 256);
         assert_eq!(key.e_bytes().as_ref(), &[1, 0, 1]);
     }
 
@@ -294,16 +317,22 @@ mod tests {
         }
     }
 
-    fn assert_subject(name: &Name, subject: &str) {
-        assert_eq!(name.to_string(), subject);
-        let mut expected = subject.split(',').collect::<Vec<_>>();
-        expected.reverse();
-        let actual = name
-            .as_ref()
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>();
-        assert_eq!(actual, expected);
+    fn assert_subject(name: &Name, expected: [&str; 3]) {
+        let rdns = name.as_ref().iter().collect::<Vec<_>>();
+        assert_eq!(rdns.len(), expected.len());
+        let oids = [
+            ObjectIdentifier::new_unwrap("2.5.4.11"),
+            ObjectIdentifier::new_unwrap("2.5.4.10"),
+            ObjectIdentifier::new_unwrap("2.5.4.3"),
+        ];
+        for (rdn, (oid, expected_value)) in rdns.iter().zip(oids.iter().zip(expected)) {
+            assert_eq!(rdn.len(), 1, "RDN must contain exactly one attribute");
+            let attribute = rdn.iter().next().expect("RDN attribute");
+            assert_eq!(attribute.oid, *oid);
+            assert_eq!(attribute.value.tag(), Tag::Utf8String);
+            let actual = Utf8StringRef::try_from(&attribute.value).expect("UTF-8 attribute value");
+            assert_eq!(actual.as_str(), expected_value);
+        }
     }
 
     fn assert_extension_order(cert: &Certificate, expected: &[ObjectIdentifier]) {
@@ -430,20 +459,13 @@ mod tests {
     #[test]
     fn bundled_public_ca_issues_a_valid_node_certificate() {
         let (cert_pem, key_pem) =
-            issue_node(CHIA_CA_CRT.as_bytes(), CHIA_CA_KEY.as_bytes(), DEFAULT_HOST)
+            issue_node(CHIA_CA_CRT.as_bytes(), CHIA_CA_KEY.as_bytes(), "chia.net")
                 .expect("issue node certificate");
         assert_certificate(
             &cert_pem,
             &key_pem,
             CHIA_CA_CRT.as_bytes(),
-            Expected {
-                subject: NODE_SUBJECT,
-                ca: false,
-                key_usage: KeyUsage(KeyUsages::DigitalSignature | KeyUsages::NonRepudiation),
-                san: Some(vec![dns_name(DEFAULT_HOST)]),
-                not_before: Bound::Near(SystemTime::now() - ONE_DAY),
-                not_after: Bound::Exact(NODE_NOT_AFTER),
-            },
+            node_expected(vec![dns_name("chia.net")]),
         );
     }
 
@@ -451,19 +473,12 @@ mod tests {
     fn private_ca_issues_a_valid_node_certificate() {
         let (ca_cert_pem, ca_key_pem) = issue_ca().expect("issue CA certificate");
         let (cert_pem, key_pem) =
-            issue_node(&ca_cert_pem, &ca_key_pem, DEFAULT_HOST).expect("issue node certificate");
+            issue_node(&ca_cert_pem, &ca_key_pem, "chia.net").expect("issue node certificate");
         assert_certificate(
             &cert_pem,
             &key_pem,
             &ca_cert_pem,
-            Expected {
-                subject: NODE_SUBJECT,
-                ca: false,
-                key_usage: KeyUsage(KeyUsages::DigitalSignature | KeyUsages::NonRepudiation),
-                san: Some(vec![dns_name(DEFAULT_HOST)]),
-                not_before: Bound::Near(SystemTime::now() - ONE_DAY),
-                not_after: Bound::Exact(NODE_NOT_AFTER),
-            },
+            node_expected(vec![dns_name("chia.net")]),
         );
     }
 
@@ -476,43 +491,44 @@ mod tests {
             &cert_pem,
             &key_pem,
             CHIA_CA_CRT.as_bytes(),
-            Expected {
-                subject: NODE_SUBJECT,
-                ca: false,
-                key_usage: KeyUsage(KeyUsages::DigitalSignature | KeyUsages::NonRepudiation),
-                san: Some(vec![
-                    dns_name("localhost"),
-                    ip_name(&[127, 0, 0, 1]),
-                    ip_name(&std::net::Ipv6Addr::LOCALHOST.octets()),
-                ]),
-                not_before: Bound::Near(SystemTime::now() - ONE_DAY),
-                not_after: Bound::Exact(NODE_NOT_AFTER),
-            },
+            node_expected(vec![
+                dns_name("localhost"),
+                ip_name(&[127, 0, 0, 1]),
+                ip_name(&std::net::Ipv6Addr::LOCALHOST.octets()),
+            ]),
         );
     }
 
     #[test]
     fn generated_ca_certificate_is_self_signed() {
         let (cert_pem, key_pem) = issue_ca().expect("issue CA certificate");
-        assert_certificate(
-            &cert_pem,
-            &key_pem,
-            &cert_pem,
-            Expected {
-                subject: CA_SUBJECT,
-                ca: true,
-                key_usage: KeyUsage(KeyUsages::KeyCertSign | KeyUsages::CRLSign),
-                san: None,
-                not_before: Bound::Exact(CA_NOT_BEFORE),
-                not_after: Bound::Near(SystemTime::now() + CA_LIFETIME),
-            },
+        assert_certificate(&cert_pem, &key_pem, &cert_pem, ca_expected());
+    }
+
+    #[test]
+    fn node_issuer_is_taken_from_the_ca_subject() {
+        let (ca_cert_pem, ca_key_pem) = issue_ca().expect("issue CA certificate");
+        let (node_cert_pem, node_key_pem) =
+            issue_node(&ca_cert_pem, &ca_key_pem, "chia.net").expect("issue node certificate");
+        let (child_cert_pem, _) =
+            issue_node(&node_cert_pem, &node_key_pem, "chia.net").expect("issue child certificate");
+        let node = parse(&node_cert_pem);
+        let child = parse(&child_cert_pem);
+        assert_eq!(
+            child.tbs_certificate().issuer(),
+            node.tbs_certificate().subject()
+        );
+        assert_ne!(
+            child.tbs_certificate().issuer(),
+            node.tbs_certificate().issuer()
         );
     }
 
     #[test]
-    fn garbage_ca_key_reports_root_key_context() {
-        let error = issue_node(CHIA_CA_CRT.as_bytes(), b"not a private key", DEFAULT_HOST)
-            .expect_err("garbage CA key must be rejected");
-        assert!(error.to_string().starts_with("Failed to load Root Key: "));
+    fn mismatched_ca_key_is_rejected() {
+        let (_, ca_key_pem) = issue_ca().expect("issue CA certificate");
+        let error = issue_node(CHIA_CA_CRT.as_bytes(), &ca_key_pem, "chia.net")
+            .expect_err("mismatched CA key must be rejected");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
 }
