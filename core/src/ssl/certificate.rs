@@ -30,6 +30,7 @@ use x509_cert::spki::{SubjectPublicKeyInfo, SubjectPublicKeyInfoRef};
 use x509_cert::time::{Time, Validity};
 
 const RSA_KEY_BITS: usize = 2048;
+const SERIAL_BYTES: usize = 16;
 const CA_SUBJECT: &str = "CN=Chia CA,O=Chia,OU=Organic Farming Division";
 const NODE_SUBJECT: &str = "CN=Chia,O=Chia,OU=Organic Farming Division";
 pub(super) const DEFAULT_HOST: &str = "chia.net";
@@ -156,7 +157,10 @@ fn issue(
     let key = PrivateKey::new(&mut rng, RSA_KEY_BITS).map_err(other)?;
     let public_key = key.to_public_key();
     let spki = SubjectPublicKeyInfo::from_key(&public_key).map_err(other)?;
-    let serial = SerialNumber::from(rng.try_next_u32().map_err(other)?);
+    let mut serial = [0u8; SERIAL_BYTES];
+    rng.try_fill_bytes(&mut serial).map_err(other)?;
+    serial[0] |= 0x01;
+    let serial = SerialNumber::new(&serial).map_err(other)?;
     let key_pem = key.to_pkcs8_pem(LineEnding::default()).map_err(other)?;
     let (issuer, signing_key) = issuer.unwrap_or_else(|| (subject.clone(), key));
     let profile = ChiaProfile {
@@ -209,6 +213,7 @@ mod tests {
     use rsa::pkcs8::DecodePublicKey;
     use rsa::signature::Verifier;
     use rsa::traits::PublicKeyParts;
+    use std::sync::Arc;
     use x509_cert::der::asn1::{ObjectIdentifier, Utf8StringRef};
     use x509_cert::der::oid::AssociatedOid;
     use x509_cert::der::referenced::OwnedToRef;
@@ -384,12 +389,8 @@ mod tests {
 
         let serial = tbs.serial_number().as_bytes();
         let serial_data = serial.strip_prefix(&[0]).unwrap_or(serial);
-        assert!(!serial_data.is_empty());
-        assert!(serial_data.len() <= 4);
-        let serial_value = serial_data
-            .iter()
-            .fold(0u32, |value, &byte| (value << 8) | u32::from(byte));
-        assert!(serial_value > 0);
+        assert_eq!(serial_data.len(), 16);
+        assert_ne!(serial_data[0], 0);
 
         let mut extension_order = vec![
             SubjectKeyIdentifier::OID,
@@ -521,6 +522,60 @@ mod tests {
         assert_ne!(
             child.tbs_certificate().issuer(),
             node.tbs_certificate().issuer()
+        );
+    }
+
+    #[test]
+    fn forged_certificate_naming_the_trusted_ca_fails_verification() {
+        let mut roots = rustls::RootCertStore::empty();
+        for cert in load_certs_from_bytes(CHIA_CA_CRT.as_bytes()).expect("load CA certificate") {
+            roots.add(cert).expect("add trusted CA");
+        }
+        let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
+            Arc::new(roots),
+            Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
+        )
+        .build()
+        .expect("build client certificate verifier");
+
+        let (cert_pem, _) = issue_node(CHIA_CA_CRT.as_bytes(), CHIA_CA_KEY.as_bytes(), "chia.net")
+            .expect("issue node certificate");
+        let cert_der = load_certs_from_bytes(&cert_pem).expect("load node certificate");
+        verifier
+            .verify_client_cert(&cert_der[0], &[], rustls::pki_types::UnixTime::now())
+            .expect("trusted node certificate must verify");
+
+        let ca_cert = parse(CHIA_CA_CRT.as_bytes());
+        let subject = Name::from_str(NODE_SUBJECT).expect("parse node subject");
+        let not_before = SystemTime::now()
+            .checked_sub(ONE_DAY)
+            .expect("system clock after Unix epoch");
+        let validity = Validity::new(
+            Time::try_from(not_before).expect("encode not before"),
+            NODE_NOT_AFTER.into(),
+        );
+        let unrelated_key =
+            PrivateKey::new(&mut SysRng, RSA_KEY_BITS).expect("generate unrelated key");
+        let (forged_pem, _) = issue(
+            Role::Node(subject_alt_names("chia.net").expect("subject alt names")),
+            subject,
+            validity,
+            Some((ca_cert.tbs_certificate().subject().clone(), unrelated_key)),
+        )
+        .expect("issue forged certificate");
+        let forged = parse(&forged_pem);
+        assert_eq!(
+            forged.tbs_certificate().issuer(),
+            ca_cert.tbs_certificate().subject()
+        );
+
+        let forged_der = load_certs_from_bytes(&forged_pem).expect("load forged certificate");
+        let error = verifier
+            .verify_client_cert(&forged_der[0], &[], rustls::pki_types::UnixTime::now())
+            .expect_err("forged certificate must fail verification");
+        assert_eq!(
+            error,
+            rustls::Error::InvalidCertificate(rustls::CertificateError::BadSignature)
         );
     }
 
