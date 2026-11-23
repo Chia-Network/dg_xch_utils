@@ -1,11 +1,5 @@
 use crate::constants::{ALL_PRIVATE_NODE_NAMES, ALL_PUBLIC_NODE_NAMES, CHIA_CA_CRT, CHIA_CA_KEY};
-use der::asn1::{Ia5String, UtcTime};
-use der::pem::LineEnding;
-use der::{DateTime, EncodePem};
 use log::{error, info};
-use rsa::pkcs1::DecodeRsaPrivateKey;
-use rsa::pkcs1v15::SigningKey;
-use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey};
 use rustls::DigitallySignedStruct;
 use rustls::DistinguishedName;
 use rustls::SignatureScheme;
@@ -15,25 +9,14 @@ use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls_pemfile::{Item, certs, read_one};
 use secrecy::zeroize::Zeroizing;
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
 use std::collections::HashMap;
 use std::fs;
 use std::fs::{File, OpenOptions, create_dir_all};
 use std::io::{BufReader, Error, ErrorKind, Read, Write};
-use std::ops::{Add, Sub};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
-use x509_cert::Certificate;
-use x509_cert::builder::{Builder, CertificateBuilder, Profile};
-use x509_cert::der::DecodePem;
-use x509_cert::ext::pkix::SubjectAltName;
-use x509_cert::ext::pkix::name::GeneralName;
-use x509_cert::name::Name;
-use x509_cert::serial_number::SerialNumber;
-use x509_cert::spki::SubjectPublicKeyInfo;
-use x509_cert::time::{Time, Validity};
+
+mod certificate;
 
 #[derive(Debug)]
 pub struct AllowAny {}
@@ -327,7 +310,7 @@ pub fn generate_ca_signed_cert_data(
     cert_data: &[u8],
     key_data: &[u8],
 ) -> Result<(Vec<u8>, Vec<u8>), Error> {
-    generate_ca_signed_cert_data_for_host(cert_data, key_data, "chia.net")
+    generate_ca_signed_cert_data_for_host(cert_data, key_data, certificate::DEFAULT_HOST)
 }
 
 pub fn generate_ca_signed_cert_data_for_host(
@@ -336,75 +319,7 @@ pub fn generate_ca_signed_cert_data_for_host(
     host: &str,
 ) -> Result<(Vec<u8>, Vec<u8>), Error> {
     validate_ssl_cert_and_key(cert_data, key_data)?;
-    let root_cert = Certificate::from_pem(cert_data).map_err(|e| Error::other(format!("{e:?}")))?;
-    let root_key = rsa::RsaPrivateKey::from_pkcs1_pem(&String::from_utf8_lossy(key_data))
-        .or_else(|_| rsa::RsaPrivateKey::from_pkcs8_pem(&String::from_utf8_lossy(key_data)))
-        .map_err(|e| Error::other(format!("Failed to load Root Key: {e:?}")))?;
-    use rsa::rand_core::RngCore;
-    let mut rng = rsa::rand_core::OsRng;
-    let cert_key =
-        rsa::RsaPrivateKey::new(&mut rng, 2048).map_err(|e| Error::other(format!("{e:?}")))?;
-    let pub_key = cert_key.to_public_key();
-    let signing_key: SigningKey<Sha256> = SigningKey::new(root_key);
-    let subject_pub_key = SubjectPublicKeyInfo::from_pem(
-        pub_key
-            .to_public_key_pem(LineEnding::default())
-            .map_err(|e| Error::other(format!("{e:?}")))?
-            .as_bytes(),
-    )
-    .map_err(|e| Error::other(format!("{e:?}")))?;
-    let mut cert = CertificateBuilder::new(
-        Profile::Leaf {
-            issuer: root_cert.tbs_certificate.issuer,
-            enable_key_agreement: false,
-            enable_key_encipherment: false,
-        },
-        SerialNumber::from(rng.next_u32()),
-        Validity {
-            not_before: Time::UtcTime(
-                UtcTime::from_system_time(SystemTime::now().sub(Duration::from_secs(60 * 60 * 24)))
-                    .map_err(|e| Error::other(format!("{e:?}")))?,
-            ),
-            not_after: Time::UtcTime(
-                UtcTime::from_date_time(
-                    DateTime::new(2049, 8, 2, 0, 0, 0)
-                        .map_err(|e| Error::other(format!("{e:?}")))?,
-                )
-                .map_err(|e| Error::other(format!("{e:?}")))?,
-            ),
-        },
-        Name::from_str("CN=Chia,O=Chia,OU=Organic Farming Division")
-            .map_err(|e| Error::other(format!("{e:?}")))?,
-        subject_pub_key,
-        &signing_key,
-    )
-    .map_err(|e| Error::other(format!("{e:?}")))?;
-    let mut names = vec![GeneralName::DnsName(
-        Ia5String::new(host).map_err(|error| Error::other(format!("{error:?}")))?,
-    )];
-    if host == "localhost" {
-        names.push(GeneralName::IpAddress(
-            der::asn1::OctetString::new([127, 0, 0, 1]).map_err(Error::other)?,
-        ));
-        names.push(GeneralName::IpAddress(
-            der::asn1::OctetString::new(std::net::Ipv6Addr::LOCALHOST.octets())
-                .map_err(Error::other)?,
-        ));
-    }
-    cert.add_extension(&SubjectAltName(names))
-        .map_err(|e| Error::other(format!("{e:?}")))?;
-    let cert = cert.build().map_err(|e| Error::other(format!("{e:?}")))?;
-    Ok((
-        cert.to_pem(LineEnding::default())
-            .map_err(|e| Error::other(format!("{e:?}")))?
-            .as_bytes()
-            .to_vec(),
-        cert_key
-            .to_pkcs8_pem(LineEnding::default())
-            .map_err(|e| Error::other(format!("{e:?}")))?
-            .as_bytes()
-            .to_vec(),
-    ))
+    certificate::issue_node(cert_data, key_data, host)
 }
 
 pub fn make_ca_cert(cert_path: &Path, key_path: &Path) -> Result<(Vec<u8>, Vec<u8>), Error> {
@@ -417,56 +332,7 @@ pub fn make_ca_cert(cert_path: &Path, key_path: &Path) -> Result<(Vec<u8>, Vec<u
 }
 
 pub fn make_ca_cert_data() -> Result<(Vec<u8>, Vec<u8>), Error> {
-    use rsa::rand_core::RngCore;
-    let mut rng = rsa::rand_core::OsRng;
-    let root_key = rsa::RsaPrivateKey::new(&mut rng, 2048)
-        .map_err(|error| Error::other(format!("failed to generate CA key: {error}")))?;
-    let pub_key = root_key.to_public_key();
-    let signing_key: SigningKey<Sha256> = SigningKey::new(root_key.clone());
-    let name = Name::from_str("CN=Chia CA,O=Chia,OU=Organic Farming Division")
-        .map_err(|e| Error::other(format!("{e:?}")))?;
-    let subject_pub_key = SubjectPublicKeyInfo::from_pem(
-        pub_key
-            .to_public_key_pem(LineEnding::default())
-            .map_err(|e| Error::other(format!("{e:?}")))?
-            .as_bytes(),
-    )
-    .map_err(|e| Error::other(format!("{e:?}")))?;
-    let cert = CertificateBuilder::new(
-        Profile::SubCA {
-            issuer: name.clone(),
-            path_len_constraint: None,
-        },
-        SerialNumber::from(rng.next_u32()),
-        Validity {
-            not_before: Time::UtcTime(
-                UtcTime::from_system_time(SystemTime::UNIX_EPOCH)
-                    .map_err(|e| Error::other(format!("{e:?}")))?,
-            ),
-            not_after: Time::UtcTime(
-                UtcTime::from_system_time(
-                    SystemTime::now().add(Duration::from_secs(60 * 60 * 24 * 3650)),
-                )
-                .map_err(|e| Error::other(format!("{e:?}")))?,
-            ),
-        },
-        name,
-        subject_pub_key,
-        &signing_key,
-    )
-    .map_err(|e| Error::other(format!("{e:?}")))?;
-    let cert = cert.build().map_err(|e| Error::other(format!("{e:?}")))?;
-    Ok((
-        cert.to_pem(LineEnding::default())
-            .map_err(|e| Error::other(format!("{e:?}")))?
-            .as_bytes()
-            .to_vec(),
-        root_key
-            .to_pkcs8_pem(LineEnding::default())
-            .map_err(|e| Error::other(format!("{e:?}")))?
-            .as_bytes()
-            .to_vec(),
-    ))
+    certificate::issue_ca()
 }
 
 pub struct MemorySSL {

@@ -15,7 +15,6 @@ async-trait = "0.1.89"
 blst = { version = "0.3.16", features = ["portable"], optional = true }
 bytes = "1.11.1"
 const-hex = "1.16.0"
-der = "0.7.9"
 dg_xch_macros = {path = "../macros", version="3.0.0"}
 dg_parser_macro = {path = "../parser_macro", version="3.0.0"}
 dg_xch_serialize = {path = "../serialize", version="3.0.0"}
@@ -38,7 +37,7 @@ rand = "0.10.0"
 regex = "1.12.3"
 rustls = {version = "0.23.45" }
 rustls-pemfile = "2.2.0"
-rsa = { version = "0.9.10", features = ["std", "pem", "sha2"] }
+rsa = { version = "0.10.0", default-features = false, features = ["std", "encoding", "getrandom", "pkcs1v15"] }
 secrecy = "0.10.3"
 serde = { version = "1.0.228", features = ["derive"] }
 sha2 = { version = "0.10.9", features = ["oid"] }
@@ -47,7 +46,7 @@ time = { version = "0.3.47", features = ["serde"]}
 tokio = {version = "1.50.0", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net", "io-util"]}
 tokio-tungstenite = {version = "0.28.0", features = ["rustls", "rustls-tls-webpki-roots"] }
 uuid = {version="1.21.0", features=["v4"]}
-x509-cert = { version = "0.2.5", features = ["std", "pem", "builder"] }
+x509-cert = { version = "0.3.1", features = ["std", "pem", "builder"] }
 
 [dev-dependencies]
 dg_logger = { path = "../logging", version = "3.0.0" }
