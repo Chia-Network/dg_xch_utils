@@ -105,6 +105,17 @@ impl BuilderProfile for ChiaProfile {
     }
 }
 
+fn node_validity() -> io::Result<Validity> {
+    let now = SystemTime::now();
+    let not_before = now
+        .checked_sub(ONE_DAY)
+        .ok_or_else(|| io::Error::other("system clock is before the Unix epoch"))?;
+    Ok(Validity::new(
+        Time::try_from(not_before).map_err(other)?,
+        NODE_NOT_AFTER.into(),
+    ))
+}
+
 pub(super) fn issue_node(
     ca_cert_pem: &[u8],
     ca_key_pem: &[u8],
@@ -115,14 +126,7 @@ pub(super) fn issue_node(
     let ca_key = decode_ca_key(ca_key_pem)?;
     let issuer = ca_cert.tbs_certificate().subject().clone();
     let subject = Name::from_str(NODE_SUBJECT).map_err(other)?;
-    let now = SystemTime::now();
-    let not_before = now
-        .checked_sub(ONE_DAY)
-        .ok_or_else(|| io::Error::other("system clock is before the Unix epoch"))?;
-    let validity = Validity::new(
-        Time::try_from(not_before).map_err(other)?,
-        NODE_NOT_AFTER.into(),
-    );
+    let validity = node_validity()?;
 
     issue(
         Role::Node(subject_alt_names(host)?),
@@ -547,13 +551,7 @@ mod tests {
 
         let ca_cert = parse(CHIA_CA_CRT.as_bytes());
         let subject = Name::from_str(NODE_SUBJECT).expect("parse node subject");
-        let not_before = SystemTime::now()
-            .checked_sub(ONE_DAY)
-            .expect("system clock after Unix epoch");
-        let validity = Validity::new(
-            Time::try_from(not_before).expect("encode not before"),
-            NODE_NOT_AFTER.into(),
-        );
+        let validity = node_validity().expect("node validity");
         let unrelated_key =
             PrivateKey::new(&mut SysRng, RSA_KEY_BITS).expect("generate unrelated key");
         let (forged_pem, _) = issue(
