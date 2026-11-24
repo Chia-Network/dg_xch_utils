@@ -121,8 +121,7 @@ fn a_noncontiguous_peak_only_keeps_an_ancestor_transaction_lower_bound() {
     );
 }
 
-#[test]
-fn full_deferral_queue_reports_the_shed_candidate() {
+fn matching_state_scheduler() -> (Scheduler, NewUnfinishedBlockTimelord) {
     let data: serde_json::Value =
         serde_json::from_str(include_str!("../../tests/fixtures/chia_hf2.json")).unwrap();
     let sequence = data["peer_sequence"].as_array().unwrap();
@@ -163,6 +162,149 @@ fn full_deferral_queue_reports_the_shed_candidate() {
         state.height = Some(12288);
     }
     scheduler.transaction_height = None;
+    (scheduler, candidate)
+}
+
+fn dummy_candidate(key: [u8; 32]) -> Candidate {
+    Candidate {
+        hash: Bytes32::from(key),
+        total_iters: 1,
+        overflow: false,
+        slot_start: 0,
+        rc_prev: Bytes32::default(),
+        signage_total_iters: 0,
+    }
+}
+
+fn fill_candidates(scheduler: &mut Scheduler, include: Option<Bytes32>) {
+    let limit = scheduler.reward_limit();
+    let reserved = usize::from(include.is_some());
+    let mut next = 0u64;
+    while scheduler.candidates.len() + reserved < limit {
+        let mut key = [0u8; 32];
+        key[..8].copy_from_slice(&next.to_le_bytes());
+        next += 1;
+        if include.is_some_and(|hash| hash.const_bytes() == key) {
+            continue;
+        }
+        scheduler.candidates.insert(key, dummy_candidate(key));
+    }
+    if let Some(hash) = include {
+        scheduler
+            .candidates
+            .insert(hash.const_bytes(), dummy_candidate(hash.const_bytes()));
+    }
+}
+
+#[test]
+fn candidate_capacity_sheds_matching_candidate_without_deferral() {
+    let (mut scheduler, candidate) = matching_state_scheduler();
+    let hash = candidate.reward_chain_block.hash().unwrap();
+    fill_candidates(&mut scheduler, None);
+    let limit = scheduler.reward_limit();
+    assert_eq!(scheduler.candidates.len(), limit);
+    assert!(!scheduler.candidates.contains_key(&hash.const_bytes()));
+
+    assert_eq!(
+        scheduler.admit_unfinished(candidate).unwrap(),
+        Admission::CandidatesFull
+    );
+    assert_eq!(scheduler.candidates.len(), limit);
+    assert!(!scheduler.candidates.contains_key(&hash.const_bytes()));
+    assert!(scheduler.deferred.is_empty());
+}
+
+#[test]
+fn chain_parameter_mismatch_precedes_capacity_shedding() {
+    let (mut scheduler, candidate) = matching_state_scheduler();
+    let fixture_key = candidate.reward_chain_block.hash().unwrap().const_bytes();
+    fill_candidates(&mut scheduler, None);
+    let limit = scheduler.reward_limit();
+    let before: Vec<[u8; 32]> = scheduler.candidates.keys().copied().collect();
+
+    let mut wrong_difficulty = candidate.clone();
+    wrong_difficulty.difficulty = wrong_difficulty.difficulty.wrapping_add(1);
+    assert_eq!(
+        scheduler.admit_unfinished(wrong_difficulty).unwrap(),
+        Admission::Ignored
+    );
+    assert_eq!(scheduler.candidates.len(), limit);
+    assert_eq!(
+        scheduler.candidates.keys().copied().collect::<Vec<_>>(),
+        before
+    );
+    assert!(!scheduler.candidates.contains_key(&fixture_key));
+
+    let mut wrong_sub_slot_iters = candidate;
+    wrong_sub_slot_iters.sub_slot_iters = wrong_sub_slot_iters.sub_slot_iters.wrapping_add(1);
+    assert_eq!(
+        scheduler.admit_unfinished(wrong_sub_slot_iters).unwrap(),
+        Admission::Ignored
+    );
+    assert_eq!(scheduler.candidates.len(), limit);
+    assert_eq!(
+        scheduler.candidates.keys().copied().collect::<Vec<_>>(),
+        before
+    );
+    assert!(!scheduler.candidates.contains_key(&fixture_key));
+}
+
+#[test]
+fn duplicate_and_stale_outcomes_precede_capacity_shedding() {
+    let (mut scheduler, candidate) = matching_state_scheduler();
+    let hash = candidate.reward_chain_block.hash().unwrap();
+    fill_candidates(&mut scheduler, Some(hash));
+    assert!(scheduler.candidates.contains_key(&hash.const_bytes()));
+    assert_eq!(scheduler.candidates.len(), scheduler.reward_limit());
+    assert_eq!(
+        scheduler.admit_unfinished(candidate.clone()).unwrap(),
+        Admission::Duplicate
+    );
+    assert_eq!(scheduler.candidates.len(), scheduler.reward_limit());
+    assert!(scheduler.candidates.contains_key(&hash.const_bytes()));
+    assert!(scheduler.deferred.is_empty());
+
+    let (mut scheduler, candidate) = matching_state_scheduler();
+    let hash = candidate.reward_chain_block.hash().unwrap();
+    fill_candidates(&mut scheduler, None);
+    assert!(!scheduler.candidates.contains_key(&hash.const_bytes()));
+    scheduler.infused.insert(hash);
+    assert_eq!(
+        scheduler.admit_unfinished(candidate.clone()).unwrap(),
+        Admission::Duplicate
+    );
+    assert_eq!(scheduler.candidates.len(), scheduler.reward_limit());
+    assert!(!scheduler.candidates.contains_key(&hash.const_bytes()));
+    assert!(scheduler.deferred.is_empty());
+
+    let (mut scheduler, candidate) = matching_state_scheduler();
+    let hash = candidate.reward_chain_block.hash().unwrap();
+    fill_candidates(&mut scheduler, None);
+    scheduler.state.as_mut().unwrap().total_iters = candidate.reward_chain_block.total_iters;
+    assert_eq!(
+        scheduler.admit_unfinished(candidate).unwrap(),
+        Admission::Stale
+    );
+    assert_eq!(scheduler.candidates.len(), scheduler.reward_limit());
+    assert!(!scheduler.candidates.contains_key(&hash.const_bytes()));
+    assert!(scheduler.deferred.is_empty());
+}
+
+#[test]
+fn chain_parameter_mismatch_is_ignored_below_capacity() {
+    let (mut scheduler, candidate) = matching_state_scheduler();
+    assert!(scheduler.candidates.is_empty());
+    scheduler.state.as_mut().unwrap().difficulty = candidate.difficulty.wrapping_add(1);
+    assert_eq!(
+        scheduler.admit_unfinished(candidate).unwrap(),
+        Admission::Ignored
+    );
+    assert!(scheduler.candidates.is_empty());
+}
+
+#[test]
+fn full_deferral_queue_reports_the_shed_candidate() {
+    let (mut scheduler, candidate) = matching_state_scheduler();
     assert_eq!(
         scheduler.admit_unfinished(candidate.clone()).unwrap(),
         Admission::Deferred

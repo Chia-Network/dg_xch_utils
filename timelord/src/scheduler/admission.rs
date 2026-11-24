@@ -9,6 +9,8 @@ pub enum Admission {
     Deferred,
     /// The candidate needed deferral but the bounded queue is full.
     DeferredQueueFull,
+    /// The candidate matches this peak but the scheduled-candidate set is full.
+    CandidatesFull,
     /// The scheduler already tracks this candidate or has infused it.
     Duplicate,
     /// The candidate belongs to an older chain or slot.
@@ -80,11 +82,12 @@ impl Scheduler {
         if block.total_iters <= state.total_iters {
             return Ok(Admission::Stale);
         }
-        if self.candidates.len() >= self.reward_limit()
-            || message.difficulty != state.difficulty
-            || message.sub_slot_iters != state.sub_slot_iters
+        if message.difficulty != state.difficulty || message.sub_slot_iters != state.sub_slot_iters
         {
             return Ok(Admission::Ignored);
+        }
+        if self.candidates.len() >= self.reward_limit() {
+            return Ok(Admission::CandidatesFull);
         }
         let height = match state.height {
             Some(height) => height
