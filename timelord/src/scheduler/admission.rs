@@ -10,6 +10,8 @@ pub enum Admission {
     /// The candidate needed deferral but the bounded queue is full.
     DeferredQueueFull,
     /// The candidate matches this peak but the scheduled-candidate set is full.
+    /// Capacity is checked before the deferral decision, so a block that would
+    /// otherwise be deferred is shed with this outcome and is not queued for retry.
     CandidatesFull,
     /// The scheduler already tracks this candidate or has infused it.
     Duplicate,

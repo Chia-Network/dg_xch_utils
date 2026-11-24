@@ -9,6 +9,44 @@ fn bytes(text: &str) -> Vec<u8> {
         .collect()
 }
 
+fn fixture_constants() -> dg_xch_core::consensus::constants::ConsensusConstants {
+    let mut c = dg_xch_core::consensus::constants::MAINNET;
+    c.min_plot_size = 18;
+    c.hard_fork_height = 0;
+    c.epoch_blocks = 768;
+    c.hard_fork2_height = 9216;
+    c.number_zero_bits_plot_filter_v2 = 7;
+    c.max_plot_strength = 9;
+    c.difficulty_constant_factor = 10052721566054;
+    c.min_plot_strength = 1;
+    c.max_effective_plot_filter_bits = 7;
+    c.plot_filter_v2_relative_height =
+        dg_xch_core::consensus::filter_schedule::FilterSchedule::try_from_slice(&[
+            33000, 30000, 27000, 24000, 21000, 18000, 9216, 6144, 3072,
+        ])
+        .unwrap();
+    c
+}
+
+fn hf2_peak_and_unfinished() -> (NewPeakTimelord, NewUnfinishedBlockTimelord) {
+    let data: serde_json::Value =
+        serde_json::from_str(include_str!("../../tests/fixtures/chia_hf2.json")).unwrap();
+    let sequence = data["peer_sequence"].as_array().unwrap();
+    let raw = bytes(sequence[0]["bytes"].as_str().unwrap());
+    let peak = NewPeakTimelord::from_bytes(
+        &mut Cursor::new(raw.as_slice()),
+        ChiaProtocolVersion::default(),
+    )
+    .unwrap();
+    let raw = bytes(sequence[1]["bytes"].as_str().unwrap());
+    let unfinished = NewUnfinishedBlockTimelord::from_bytes(
+        &mut Cursor::new(raw.as_slice()),
+        ChiaProtocolVersion::default(),
+    )
+    .unwrap();
+    (peak, unfinished)
+}
+
 #[test]
 fn a_new_peak_retries_deferred_candidates_without_stopping_other_work() {
     let data: serde_json::Value =
@@ -26,15 +64,7 @@ fn a_new_peak_retries_deferred_candidates_without_stopping_other_work() {
         ChiaProtocolVersion::default(),
     )
     .unwrap();
-    let mut c = dg_xch_core::consensus::constants::MAINNET;
-    c.min_plot_size = 18;
-    c.hard_fork_height = 0;
-    c.epoch_blocks = 768;
-    c.hard_fork2_height = 9216;
-    c.number_zero_bits_plot_filter_v2 = 7;
-    c.max_plot_strength = 9;
-    c.difficulty_constant_factor = 10052721566054;
-    let mut scheduler = Scheduler::new(c, false, None).unwrap();
+    let mut scheduler = Scheduler::new(fixture_constants(), false, None).unwrap();
     let hash = candidate.reward_chain_block.hash().unwrap();
     scheduler
         .deferred
@@ -88,15 +118,7 @@ fn a_noncontiguous_peak_only_keeps_an_ancestor_transaction_lower_bound() {
         ChiaProtocolVersion::default(),
     )
     .unwrap();
-    let mut c = dg_xch_core::consensus::constants::MAINNET;
-    c.min_plot_size = 18;
-    c.hard_fork_height = 0;
-    c.epoch_blocks = 768;
-    c.hard_fork2_height = 9216;
-    c.number_zero_bits_plot_filter_v2 = 7;
-    c.max_plot_strength = 9;
-    c.difficulty_constant_factor = 10052721566054;
-    let mut scheduler = Scheduler::new(c, false, None).unwrap();
+    let mut scheduler = Scheduler::new(fixture_constants(), false, None).unwrap();
     assert!(scheduler.set_peak(peak.clone()).unwrap());
 
     let ancestor = peak.previous_reward_challenges[0].0;
@@ -137,22 +159,7 @@ fn matching_state_scheduler() -> (Scheduler, NewUnfinishedBlockTimelord) {
         ChiaProtocolVersion::default(),
     )
     .unwrap();
-    let mut c = dg_xch_core::consensus::constants::MAINNET;
-    c.min_plot_size = 18;
-    c.hard_fork_height = 0;
-    c.epoch_blocks = 768;
-    c.hard_fork2_height = 9216;
-    c.number_zero_bits_plot_filter_v2 = 7;
-    c.max_plot_strength = 9;
-    c.difficulty_constant_factor = 10052721566054;
-    c.min_plot_strength = 1;
-    c.max_effective_plot_filter_bits = 7;
-    c.plot_filter_v2_relative_height =
-        dg_xch_core::consensus::filter_schedule::FilterSchedule::try_from_slice(&[
-            33000, 30000, 27000, 24000, 21000, 18000, 9216, 6144, 3072,
-        ])
-        .unwrap();
-    let mut scheduler = Scheduler::new(c, false, None).unwrap();
+    let mut scheduler = Scheduler::new(fixture_constants(), false, None).unwrap();
     assert!(scheduler.set_peak(peak).unwrap());
     {
         let state = scheduler.state.as_mut().unwrap();
@@ -176,23 +183,51 @@ fn dummy_candidate(key: [u8; 32]) -> Candidate {
     }
 }
 
+fn surviving_candidate(rc_prev: Bytes32) -> Candidate {
+    Candidate {
+        hash: Bytes32::default(),
+        total_iters: u128::MAX,
+        overflow: false,
+        slot_start: u128::MAX,
+        rc_prev,
+        signage_total_iters: u128::MAX,
+    }
+}
+
 fn fill_candidates(scheduler: &mut Scheduler, include: Option<Bytes32>) {
     let limit = scheduler.reward_limit();
-    let reserved = usize::from(include.is_some());
-    let mut next = 0u64;
-    while scheduler.candidates.len() + reserved < limit {
-        let mut key = [0u8; 32];
-        key[..8].copy_from_slice(&next.to_le_bytes());
-        next += 1;
-        if include.is_some_and(|hash| hash.const_bytes() == key) {
-            continue;
-        }
-        scheduler.candidates.insert(key, dummy_candidate(key));
-    }
     if let Some(hash) = include {
         scheduler
             .candidates
             .insert(hash.const_bytes(), dummy_candidate(hash.const_bytes()));
+    }
+    let mut next = 0u64;
+    while scheduler.candidates.len() < limit {
+        let mut key = [0u8; 32];
+        key[..8].copy_from_slice(&next.to_le_bytes());
+        next += 1;
+        scheduler.candidates.insert(key, dummy_candidate(key));
+    }
+}
+
+fn first_peak_scheduler() -> (Scheduler, NewPeakTimelord, NewUnfinishedBlockTimelord) {
+    let (peak, unfinished) = hf2_peak_and_unfinished();
+    let scheduler = Scheduler::new(fixture_constants(), false, None).unwrap();
+    (scheduler, peak, unfinished)
+}
+
+fn fill_surviving(scheduler: &mut Scheduler, limit: usize, rc_prev: Bytes32, exclude: [u8; 32]) {
+    let mut next = 0u64;
+    while scheduler.candidates.len() < limit {
+        let mut key = [0u8; 32];
+        key[..8].copy_from_slice(&next.to_le_bytes());
+        next += 1;
+        if key == exclude {
+            continue;
+        }
+        scheduler
+            .candidates
+            .insert(key, surviving_candidate(rc_prev));
     }
 }
 
@@ -206,12 +241,85 @@ fn candidate_capacity_sheds_matching_candidate_without_deferral() {
     assert!(!scheduler.candidates.contains_key(&hash.const_bytes()));
 
     assert_eq!(
-        scheduler.admit_unfinished(candidate).unwrap(),
+        scheduler.admit_unfinished(candidate.clone()).unwrap(),
         Admission::CandidatesFull
     );
     assert_eq!(scheduler.candidates.len(), limit);
     assert!(!scheduler.candidates.contains_key(&hash.const_bytes()));
     assert!(scheduler.deferred.is_empty());
+    assert!(!scheduler.infused.contains(&hash));
+
+    assert!(!scheduler.add_unfinished(candidate.clone()).unwrap());
+    assert_eq!(scheduler.candidates.len(), limit);
+    assert!(!scheduler.candidates.contains_key(&hash.const_bytes()));
+    assert!(scheduler.deferred.is_empty());
+    assert!(!scheduler.infused.contains(&hash));
+
+    let shed_key = *scheduler.candidates.keys().next().unwrap();
+    scheduler.candidates.remove(&shed_key);
+    assert_eq!(scheduler.candidates.len(), limit - 1);
+    assert_eq!(
+        scheduler.admit_unfinished(candidate).unwrap(),
+        Admission::Deferred
+    );
+}
+
+#[test]
+fn set_peak_sheds_deferred_candidate_at_capacity() {
+    let (mut scheduler, peak, unfinished) = first_peak_scheduler();
+    let hash = unfinished.reward_chain_block.hash().unwrap();
+    let peak_hash = peak.reward_chain_block.hash().unwrap();
+    let limit = scheduler.reward_limit();
+    fill_surviving(&mut scheduler, limit, peak_hash, hash.const_bytes());
+    scheduler.deferred.insert(hash.const_bytes(), unfinished);
+
+    assert!(scheduler.set_peak(peak).unwrap());
+    assert_eq!(
+        scheduler.take_retry_outcomes(),
+        vec![(hash, Ok(Admission::CandidatesFull))]
+    );
+    assert!(scheduler.deferred.is_empty());
+    assert_eq!(scheduler.candidates.len(), limit);
+    assert!(!scheduler.candidates.contains_key(&hash.const_bytes()));
+}
+
+#[test]
+fn set_peak_promotes_deferred_candidate_below_capacity() {
+    let (mut scheduler, peak, unfinished) = first_peak_scheduler();
+    let hash = unfinished.reward_chain_block.hash().unwrap();
+    let peak_hash = peak.reward_chain_block.hash().unwrap();
+    let limit = scheduler.reward_limit();
+    fill_surviving(&mut scheduler, limit - 1, peak_hash, hash.const_bytes());
+    scheduler.deferred.insert(hash.const_bytes(), unfinished);
+
+    assert!(scheduler.set_peak(peak).unwrap());
+    assert_eq!(
+        scheduler.take_retry_outcomes(),
+        vec![(hash, Ok(Admission::Admitted(hash)))]
+    );
+    assert!(scheduler.deferred.is_empty());
+    assert_eq!(scheduler.candidates.len(), limit);
+    assert!(scheduler.candidates.contains_key(&hash.const_bytes()));
+}
+
+#[test]
+fn set_peak_ignores_deferred_candidate_with_mismatched_parameters_at_capacity() {
+    let (mut scheduler, peak, mut unfinished) = first_peak_scheduler();
+    let hash = unfinished.reward_chain_block.hash().unwrap();
+    let peak_hash = peak.reward_chain_block.hash().unwrap();
+    let limit = scheduler.reward_limit();
+    fill_surviving(&mut scheduler, limit, peak_hash, hash.const_bytes());
+    unfinished.difficulty = unfinished.difficulty.wrapping_add(1);
+    scheduler.deferred.insert(hash.const_bytes(), unfinished);
+
+    assert!(scheduler.set_peak(peak).unwrap());
+    assert_eq!(
+        scheduler.take_retry_outcomes(),
+        vec![(hash, Ok(Admission::Ignored))]
+    );
+    assert!(scheduler.deferred.is_empty());
+    assert_eq!(scheduler.candidates.len(), limit);
+    assert!(!scheduler.candidates.contains_key(&hash.const_bytes()));
 }
 
 #[test]
@@ -235,7 +343,7 @@ fn chain_parameter_mismatch_precedes_capacity_shedding() {
     );
     assert!(!scheduler.candidates.contains_key(&fixture_key));
 
-    let mut wrong_sub_slot_iters = candidate;
+    let mut wrong_sub_slot_iters = candidate.clone();
     wrong_sub_slot_iters.sub_slot_iters = wrong_sub_slot_iters.sub_slot_iters.wrapping_add(1);
     assert_eq!(
         scheduler.admit_unfinished(wrong_sub_slot_iters).unwrap(),
@@ -247,10 +355,24 @@ fn chain_parameter_mismatch_precedes_capacity_shedding() {
         before
     );
     assert!(!scheduler.candidates.contains_key(&fixture_key));
+
+    let mut wrong_both = candidate;
+    wrong_both.difficulty = wrong_both.difficulty.wrapping_add(1);
+    wrong_both.sub_slot_iters = wrong_both.sub_slot_iters.wrapping_add(1);
+    assert_eq!(
+        scheduler.admit_unfinished(wrong_both).unwrap(),
+        Admission::Ignored
+    );
+    assert_eq!(scheduler.candidates.len(), limit);
+    assert_eq!(
+        scheduler.candidates.keys().copied().collect::<Vec<_>>(),
+        before
+    );
+    assert!(!scheduler.candidates.contains_key(&fixture_key));
 }
 
 #[test]
-fn duplicate_and_stale_outcomes_precede_capacity_shedding() {
+fn candidate_duplicate_precedes_capacity_shedding() {
     let (mut scheduler, candidate) = matching_state_scheduler();
     let hash = candidate.reward_chain_block.hash().unwrap();
     fill_candidates(&mut scheduler, Some(hash));
@@ -263,7 +385,10 @@ fn duplicate_and_stale_outcomes_precede_capacity_shedding() {
     assert_eq!(scheduler.candidates.len(), scheduler.reward_limit());
     assert!(scheduler.candidates.contains_key(&hash.const_bytes()));
     assert!(scheduler.deferred.is_empty());
+}
 
+#[test]
+fn infused_duplicate_precedes_capacity_shedding() {
     let (mut scheduler, candidate) = matching_state_scheduler();
     let hash = candidate.reward_chain_block.hash().unwrap();
     fill_candidates(&mut scheduler, None);
@@ -276,7 +401,10 @@ fn duplicate_and_stale_outcomes_precede_capacity_shedding() {
     assert_eq!(scheduler.candidates.len(), scheduler.reward_limit());
     assert!(!scheduler.candidates.contains_key(&hash.const_bytes()));
     assert!(scheduler.deferred.is_empty());
+}
 
+#[test]
+fn stale_block_precedes_capacity_shedding() {
     let (mut scheduler, candidate) = matching_state_scheduler();
     let hash = candidate.reward_chain_block.hash().unwrap();
     fill_candidates(&mut scheduler, None);
@@ -300,6 +428,7 @@ fn chain_parameter_mismatch_is_ignored_below_capacity() {
         Admission::Ignored
     );
     assert!(scheduler.candidates.is_empty());
+    assert!(scheduler.deferred.is_empty());
 }
 
 #[test]
